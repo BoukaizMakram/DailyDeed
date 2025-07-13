@@ -17,9 +17,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Link } from 'expo-router';
 import { PanGestureHandler, State } from 'react-native-gesture-handler';
 import PagerView from 'react-native-pager-view';
-
-// Import data from separate file
 import { Reminder, remindersData } from '../assets/Reminders';
+
 
 const { width, height } = Dimensions.get('window');
 
