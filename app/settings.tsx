@@ -1,12 +1,14 @@
 import { Poppins_400Regular, Poppins_500Medium, Poppins_600SemiBold, Poppins_700Bold, useFonts } from '@expo-google-fonts/poppins';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
 import { Link } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
 
 interface Settings {
   notifications: boolean;
+  notificationInterval: number; // in minutes, 0 = disabled, 1-300 (5 hours)
   darkMode: boolean;
   showHadith: boolean;
   dailyGoal: number;
@@ -26,11 +28,28 @@ export default function Settings() {
   const systemColorScheme = useColorScheme();
   const [settings, setSettings] = useState<Settings>({
     notifications: true,
+    notificationInterval: 0, // disabled by default
     darkMode: systemColorScheme === 'dark',
     showHadith: true,
     dailyGoal: 5,
   });
   const [isDarkMode, setIsDarkMode] = useState(systemColorScheme === 'dark');
+  
+  // Single source of truth for interval display
+  const [currentInterval, setCurrentInterval] = useState(0);
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  
+  // Stable refs for debouncing
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const settingsRef = useRef<Settings>(settings);
+
+  // Dropdown options for reminder frequency
+  const frequencyOptions = [
+    { label: 'Off', value: 0, description: 'No reminders' },
+    { label: 'Low', value: 180, description: 'Every 3 hours' },
+    { label: 'Moderate', value: 60, description: 'Every hour' },
+    { label: 'High', value: 30, description: 'Every 30 minutes' },
+  ];
 
   // Load fonts
   const [fontsLoaded] = useFonts({
@@ -47,7 +66,26 @@ export default function Settings() {
   useEffect(() => {
     loadSettings();
     startAnimations();
+    
+    // Cleanup function to clear debounce timer
+    return () => {
+      if (debounceTimer.current) {
+        clearTimeout(debounceTimer.current);
+      }
+    };
   }, []);
+
+  // Keep settingsRef updated
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+
+  // Update current interval when settings change (but not during dropdown interaction)
+  useEffect(() => {
+    if (!isDropdownOpen) {
+      setCurrentInterval(settings.notificationInterval);
+    }
+  }, [settings.notificationInterval, isDropdownOpen]);
 
   const startAnimations = () => {
     Animated.parallel([
@@ -72,6 +110,7 @@ export default function Settings() {
       if (savedSettings) {
         const parsedSettings = JSON.parse(savedSettings);
         setSettings(parsedSettings);
+        setCurrentInterval(parsedSettings.notificationInterval || 0);
       }
       
       if (savedTheme !== null) {
@@ -88,6 +127,7 @@ export default function Settings() {
     try {
       await AsyncStorage.setItem('appSettings', JSON.stringify(newSettings));
       await AsyncStorage.setItem('darkMode', JSON.stringify(newSettings.darkMode));
+      // Don't update local state here - let the individual update functions handle it
       setSettings(newSettings);
       setIsDarkMode(newSettings.darkMode);
     } catch (error) {
@@ -95,10 +135,20 @@ export default function Settings() {
     }
   };
 
-  const updateSetting = (key: keyof Settings, value: any) => {
-    const newSettings = { ...settings, [key]: value };
+  const updateSetting = useCallback((key: keyof Settings, value: any) => {
+    const newSettings = { ...settingsRef.current, [key]: value };
     saveSettings(newSettings);
-  };
+  }, []);
+
+  // Handle dropdown selection
+  const handleFrequencyChange = useCallback((value: number) => {
+    setCurrentInterval(value);
+    setIsDropdownOpen(false);
+    if (debounceTimer.current) {
+      clearTimeout(debounceTimer.current);
+    }
+    updateSetting('notificationInterval', value);
+  }, [updateSetting]);
 
   const clearData = async () => {
     try {
@@ -107,6 +157,15 @@ export default function Settings() {
     } catch (error) {
       console.log('Error clearing data:', error);
     }
+  };
+
+  const formatIntervalText = (minutes: number) => {
+    if (minutes === 0) return 'Disabled';
+    if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    if (remainingMinutes === 0) return `${hours} hour${hours === 1 ? '' : 's'}`;
+    return `${hours}h ${remainingMinutes}m`;
   };
 
   if (!fontsLoaded) {
@@ -128,6 +187,9 @@ export default function Settings() {
     border: isDarkMode ? '#2a2a2a' : '#f0f4f9',
     navbar: '#9ca2ac',
   };
+
+  // Use current interval for display - single source of truth
+  const displayValue = currentInterval;
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
@@ -157,6 +219,7 @@ export default function Settings() {
         style={styles.scrollContainer}
         contentContainerStyle={styles.scrollContent} 
         showsVerticalScrollIndicator={false}
+        onTouchStart={() => setIsDropdownOpen(false)}
       >
         {/* Profile Section */}
         <Animated.View 
@@ -216,6 +279,83 @@ export default function Settings() {
                 trackColor={{ false: theme.border, true: theme.accent }}
                 thumbColor={'#ffffff'}
               />
+            </View>
+
+            <View style={[styles.separator, { backgroundColor: theme.border }]} />
+
+            <View style={styles.settingItem}>
+              <View style={styles.settingLeft}>
+                             <Ionicons name="time" size={24} color="#9ca1ab" style={styles.settingIcon} />
+                <View style={styles.settingTextContainer}>
+                  <Text style={[styles.settingTitle, { color: theme.textPrimary, fontFamily: 'Poppins_500Medium' }]}>
+                    Random Reminders
+                  </Text>
+                  <Text style={[styles.settingSubtitle, { color: theme.textSecondary, fontFamily: 'Poppins_400Regular' }]}>
+                   
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            {/* Notification Frequency Dropdown */}
+            <View style={[styles.dropdownContainer, { backgroundColor: theme.cardBackground }]}>
+              <TouchableOpacity 
+                style={[styles.dropdownButton, { borderColor: theme.border }]}
+                onPress={() => setIsDropdownOpen(!isDropdownOpen)}
+              >
+                <View style={styles.dropdownButtonContent}>
+                  <Text style={[styles.dropdownButtonText, { color: theme.textPrimary, fontFamily: 'Poppins_500Medium' }]}>
+                    {frequencyOptions.find(option => option.value === currentInterval)?.label || 'Off'}
+                  </Text>
+                  <Text style={[styles.dropdownButtonDescription, { color: theme.textSecondary, fontFamily: 'Poppins_400Regular' }]}>
+                    {frequencyOptions.find(option => option.value === currentInterval)?.description || 'No reminders'}
+                  </Text>
+                </View>
+                <Ionicons 
+                  name={isDropdownOpen ? "chevron-up" : "chevron-down"} 
+                  size={20} 
+                  color={theme.textSecondary} 
+                />
+              </TouchableOpacity>
+              
+              {isDropdownOpen && (
+                <View style={[styles.dropdownMenu, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
+                  {frequencyOptions.map((option) => (
+                    <TouchableOpacity
+                      key={option.value}
+                      style={[
+                        styles.dropdownMenuItem,
+                        { backgroundColor: currentInterval === option.value ? theme.accent + '20' : 'transparent' }
+                      ]}
+                      onPress={() => handleFrequencyChange(option.value)}
+                    >
+                      <View style={styles.dropdownMenuItemContent}>
+                        <Text style={[
+                          styles.dropdownMenuItemText, 
+                          { 
+                            color: currentInterval === option.value ? theme.accent : theme.textPrimary,
+                            fontFamily: 'Poppins_500Medium'
+                          }
+                        ]}>
+                          {option.label}
+                        </Text>
+                        <Text style={[
+                          styles.dropdownMenuItemDescription, 
+                          { 
+                            color: currentInterval === option.value ? theme.accent : theme.textSecondary,
+                            fontFamily: 'Poppins_400Regular'
+                          }
+                        ]}>
+                          {option.description}
+                        </Text>
+                      </View>
+                      {currentInterval === option.value && (
+                        <Ionicons name="checkmark" size={20} color={theme.accent} />
+                      )}
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
             </View>
 
             <View style={[styles.separator, { backgroundColor: theme.border }]} />
@@ -545,6 +685,63 @@ const styles = StyleSheet.create({
   settingTitle: {
     fontSize: 16,
     fontWeight: '500',
+  },
+  settingTextContainer: {
+    flex: 1,
+  },
+  settingSubtitle: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  dropdownContainer: {
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+  },
+  dropdownButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    minHeight: 60,
+  },
+  dropdownButtonContent: {
+    flex: 1,
+  },
+  dropdownButtonText: {
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  dropdownButtonDescription: {
+    fontSize: 14,
+    marginTop: 2,
+  },
+  dropdownMenu: {
+    marginTop: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  dropdownMenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    minHeight: 60,
+  },
+  dropdownMenuItemContent: {
+    flex: 1,
+  },
+  dropdownMenuItemText: {
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  dropdownMenuItemDescription: {
+    fontSize: 14,
+    marginTop: 2,
   },
   settingRight: {
     flexDirection: 'row',

@@ -1,6 +1,9 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
+  Alert,
   Animated,
+  AppState,
+  AppStateStatus,
   Dimensions,
   RefreshControl,
   ScrollView,
@@ -18,6 +21,7 @@ import { Link } from 'expo-router';
 import { PanGestureHandler, State } from 'react-native-gesture-handler';
 import PagerView from 'react-native-pager-view';
 import { Reminder, remindersData } from '../assets/Reminders';
+// import * as Notifications from 'expo-notifications'; // Commented out for Expo Go compatibility
 
 
 const { width, height } = Dimensions.get('window');
@@ -27,6 +31,14 @@ interface DailyProgress {
   completedDeeds: number[];
   favorites: number[];
   currentStreak: number;
+}
+
+interface Settings {
+  notifications: boolean;
+  notificationInterval: number; // in minutes, 0 = disabled, 1-300 (5 hours)
+  darkMode: boolean;
+  showHadith: boolean;
+  dailyGoal: number;
 }
 
 interface ThemeColors {
@@ -39,6 +51,21 @@ interface ThemeColors {
   navbar: string;
 }
 
+// Alternative notification system for Expo Go
+// When ready for development build, uncomment the expo-notifications code below
+/*
+// Configure how notifications are handled when app is in foreground
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+    shouldShowBanner: true,
+    shouldShowList: true,
+  }),
+});
+*/
+
 export default function Home() {
   const systemColorScheme = useColorScheme();
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -49,6 +76,14 @@ export default function Home() {
   const [totalCompleted, setTotalCompleted] = useState(0);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [settings, setSettings] = useState<Settings>({
+    notifications: true,
+    notificationInterval: 0, // disabled by default
+    darkMode: false,
+    showHadith: true,
+    dailyGoal: 5,
+  });
+  const [notificationPermission, setNotificationPermission] = useState<string>('granted'); // For Expo Go compatibility
   
   // Load fonts
   const [fontsLoaded] = useFonts({
@@ -61,17 +96,215 @@ export default function Home() {
   // Animations
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const pagerRef = useRef<PagerView>(null);
+  const appState = useRef(AppState.currentState);
+  const reminderInterval = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     loadProgress();
+    loadSettings();
     loadThemePreference();
     setCurrentReminder(remindersData[currentIndex]);
     startAnimations();
+    
+    // Handle app state changes
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    
+    return () => {
+      subscription?.remove();
+      // Clean up interval when component unmounts
+      if (reminderInterval.current) {
+        clearInterval(reminderInterval.current);
+      }
+    };
   }, []);
 
   useEffect(() => {
     setCurrentReminder(remindersData[currentIndex]);
   }, [currentIndex]);
+
+  useEffect(() => {
+    // Start or stop reminder interval based on settings
+    if (settings.notificationInterval > 0) {
+      startReminderSystem();
+    } else {
+      stopReminderSystem();
+    }
+  }, [settings.notificationInterval]);
+
+  const handleAppStateChange = (nextAppState: AppStateStatus) => {
+    if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
+      // App has come to the foreground
+      console.log('App has come to the foreground!');
+    }
+    appState.current = nextAppState;
+  };
+
+  // Alternative reminder system for Expo Go
+  const startReminderSystem = () => {
+    if (reminderInterval.current) {
+      clearInterval(reminderInterval.current);
+    }
+    
+    if (settings.notificationInterval === 0) {
+      console.log('Reminders disabled');
+      return;
+    }
+    
+    const intervalMs = settings.notificationInterval * 60 * 1000; // Convert minutes to milliseconds
+    
+    reminderInterval.current = setInterval(() => {
+      showReminderAlert();
+    }, intervalMs);
+    
+    console.log(`Started reminder system with ${settings.notificationInterval} minute intervals`);
+  };
+
+  const stopReminderSystem = () => {
+    if (reminderInterval.current) {
+      clearInterval(reminderInterval.current);
+      reminderInterval.current = null;
+      console.log('Stopped reminder system');
+    }
+  };
+
+  const showReminderAlert = () => {
+    const randomIndex = Math.floor(Math.random() * remindersData.length);
+    const randomReminder = remindersData[randomIndex];
+    
+    Alert.alert(
+      "Daily Deed Reminder 🌟",
+      `${randomReminder.reminder}\n\n— ${randomReminder.source}`,
+      [
+        {
+          text: "Dismiss",
+          style: "cancel"
+        },
+        {
+          text: "Mark as Done",
+          style: "default",
+          onPress: () => {
+            if (!completedToday.includes(randomIndex)) {
+              const newCompleted = [...completedToday, randomIndex];
+              setCompletedToday(newCompleted);
+              setTotalCompleted(newCompleted.length);
+              if (newCompleted.length === 1) {
+                setStreak(streak + 1);
+              }
+              saveProgress();
+            }
+          }
+        }
+      ],
+      { cancelable: true }
+    );
+  };
+
+  // For development build, uncomment this function:
+  /*
+  const requestNotificationPermissions = async () => {
+    try {
+      const { status: existingStatus } = await Notifications.getPermissionsAsync();
+      let finalStatus = existingStatus;
+      
+      if (existingStatus !== 'granted') {
+        const { status } = await Notifications.requestPermissionsAsync({
+          ios: {
+            allowAlert: true,
+            allowBadge: false,
+            allowSound: true,
+            allowDisplayInCarPlay: false,
+            allowCriticalAlerts: false,
+            provideAppNotificationSettings: false,
+            allowProvisional: false,
+          },
+        });
+        finalStatus = status;
+      }
+      
+      setNotificationPermission(finalStatus);
+      
+      if (finalStatus !== 'granted') {
+        console.log('Notification permissions not granted');
+        return;
+      }
+      
+      console.log('Local notification permissions granted');
+    } catch (error) {
+      console.log('Error requesting notification permissions:', error);
+    }
+  };
+  */
+
+  const loadSettings = async () => {
+    try {
+      const savedSettings = await AsyncStorage.getItem('appSettings');
+      if (savedSettings) {
+        const parsedSettings = JSON.parse(savedSettings);
+        setSettings(parsedSettings);
+      }
+    } catch (error) {
+      console.log('Error loading settings:', error);
+    }
+  };
+
+  // For development build, uncomment these functions:
+  /*
+  const scheduleRandomReminderNotifications = async () => {
+    try {
+      await cancelAllRandomReminderNotifications();
+      
+      if (settings.notificationInterval === 0) {
+        console.log('Notifications disabled, not scheduling any');
+        return;
+      }
+      
+      const intervalSeconds = settings.notificationInterval * 60;
+      const numberOfNotifications = intervalSeconds > 1800 ? 10 : 20;
+      
+      for (let i = 0; i < numberOfNotifications; i++) {
+        const randomIndex = Math.floor(Math.random() * remindersData.length);
+        const randomReminder = remindersData[randomIndex];
+        
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: "Daily Deed Reminder 🌟",
+            body: randomReminder.reminder,
+            data: { 
+              reminder: randomReminder,
+              source: randomReminder.source,
+              category: randomReminder.category,
+              type: 'random_reminder'
+            },
+            sound: true,
+          },
+          trigger: {
+            seconds: (i + 1) * intervalSeconds,
+          } as Notifications.TimeIntervalTriggerInput,
+        });
+      }
+      
+      console.log(`Scheduled ${numberOfNotifications} random reminder notifications with ${settings.notificationInterval} minute intervals`);
+    } catch (error) {
+      console.log('Error scheduling random reminder notifications:', error);
+    }
+  };
+
+  const cancelAllRandomReminderNotifications = async () => {
+    try {
+      const scheduledNotifications = await Notifications.getAllScheduledNotificationsAsync();
+      
+      for (const notification of scheduledNotifications) {
+        if (notification.content.data?.type === 'random_reminder') {
+          await Notifications.cancelScheduledNotificationAsync(notification.identifier);
+        }
+      }
+      
+      console.log('Cancelled all random reminder notifications');
+    } catch (error) {
+      console.log('Error cancelling random reminder notifications:', error);
+    }
+  };
+  */
 
   const loadProgress = async () => {
     try {
@@ -139,6 +372,14 @@ export default function Home() {
     }).start();
   };
 
+  const formatIntervalText = (minutes: number) => {
+    if (minutes === 0) return 'Disabled';
+    if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    if (remainingMinutes === 0) return `${hours} hour${hours === 1 ? '' : 's'}`;
+    return `${hours}h ${remainingMinutes}m`;
+  };
 
 
   // Carousel navigation helper
@@ -298,8 +539,34 @@ export default function Home() {
         }
       >
 
+        {/* Notification Permission Notice */}
+        {settings.notificationInterval > 0 && notificationPermission !== 'granted' && (
+          <View style={[styles.permissionNotice, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
+            <View style={styles.permissionContent}>
+              <Ionicons name="notifications-off" size={24} color="#ff6b6b" />
+              <View style={styles.permissionText}>
+                <Text style={[styles.permissionTitle, { color: theme.textPrimary, fontFamily: 'Poppins_600SemiBold' }]}>
+                  Notification Permission Required
+                </Text>
+                <Text style={[styles.permissionDescription, { color: theme.textSecondary, fontFamily: 'Poppins_400Regular' }]}>
+                  Please enable notifications to receive reminders every {formatIntervalText(settings.notificationInterval).toLowerCase()}, even when the app is closed.
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity 
+              style={[styles.permissionButton, { backgroundColor: theme.accent }]}
+              onPress={() => Alert.alert('Enable Notifications', 'Please enable notifications in your device settings.', [{ text: 'OK' }])}
+            >
+              <Text style={[styles.permissionButtonText, { fontFamily: 'Poppins_500Medium' }]}>
+                Enable
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
-                                {/* PagerView Carousel */}
+       
+
+        {/* PagerView Carousel */}
         <View style={styles.carouselContainer}>
           <Animated.View style={{ opacity: fadeAnim }}>
             <PanGestureHandler
@@ -355,7 +622,7 @@ export default function Home() {
 
                   <View style={styles.cardContent}>
                     <Text style={[styles.cardTitle, { color: theme.textPrimary, fontFamily: 'Poppins_600SemiBold' }]}> 
-                      Today's Good Deed
+                      Today&apos;s Good Deed
                     </Text>
                     <Text style={[
                       styles.quoteText, 
@@ -400,7 +667,7 @@ export default function Home() {
                       disabled={completedToday.includes(index)}
                     >
                       <Text style={[styles.buttonText, { fontFamily: 'Poppins_600SemiBold' }]}> 
-                        {completedToday.includes(index) ? '✓ Completed!' : 'I Did It!'}
+                        {completedToday.includes(index) ? "✓ Completed!" : "I Did It!"}
                       </Text>
                     </TouchableOpacity>
                   </View>
@@ -673,7 +940,78 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
 
+  permissionNotice: {
+    borderRadius: 16,
+    padding: 20,
+    marginHorizontal: 20,
+    marginTop: 10,
+    borderWidth: 1,
+    minHeight: 120,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 20,
+  },
+  permissionContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  permissionText: {
+    marginLeft: 10,
+  },
+  permissionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  permissionDescription: {
+    fontSize: 14,
+    marginTop: 4,
+  },
+  permissionButton: {
+    borderRadius: 20,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+  },
+  permissionButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '500',
+  },
 
+  statusNotice: {
+    borderRadius: 16,
+    padding: 20,
+    marginHorizontal: 20,
+    marginTop: 10,
+    borderWidth: 1,
+    minHeight: 120,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 20,
+  },
+  statusContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  statusIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  statusText: {
+    marginLeft: 10,
+  },
+  statusTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  statusDescription: {
+    fontSize: 14,
+    marginTop: 4,
+  },
 
   bottomPadding: {
     height: 100,
