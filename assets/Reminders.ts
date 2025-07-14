@@ -7,7 +7,7 @@ export interface Reminder {
 
 export const remindersData: Reminder[] = [
   { 
-    reminder: "Avoid backbiting today", 
+    reminder: "Avoid backaddadd the biting today", 
     source: "Sahih Bukhari",
     hadith: "The believer is not one who eats his fill while his neighbor goes hungry.",
     category: "Speech"

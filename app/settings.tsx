@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { Link } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Animated, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
+import { Alert, Animated, Modal, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, useColorScheme, View } from 'react-native';
 
 interface Settings {
   notifications: boolean;
@@ -38,6 +38,8 @@ export default function Settings() {
   // Single source of truth for interval display
   const [currentInterval, setCurrentInterval] = useState(0);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [isGoalModalOpen, setIsGoalModalOpen] = useState(false);
+  const [tempGoal, setTempGoal] = useState('5');
   
   // Stable refs for debouncing
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -136,19 +138,81 @@ export default function Settings() {
   };
 
   const updateSetting = useCallback((key: keyof Settings, value: any) => {
-    const newSettings = { ...settingsRef.current, [key]: value };
-    saveSettings(newSettings);
+    // Immediately update the local state to prevent flicker
+    setSettings(prev => {
+      const newSettings = { ...prev, [key]: value };
+      // Save to storage asynchronously without blocking UI
+      setTimeout(() => saveSettingsAsync(newSettings), 0);
+      return newSettings;
+    });
+    
+    // Update dark mode immediately if it's the darkMode setting
+    if (key === 'darkMode') {
+      setIsDarkMode(value);
+    }
   }, []);
+
+  const saveSettingsAsync = useCallback(async (newSettings: Settings) => {
+    try {
+      await AsyncStorage.setItem('appSettings', JSON.stringify(newSettings));
+      await AsyncStorage.setItem('darkMode', JSON.stringify(newSettings.darkMode));
+    } catch (error) {
+      console.log('Error saving settings:', error);
+    }
+  }, []);
+
+  // Memoized handlers for switches to prevent flicker
+  const handleNotificationsChange = useCallback((value: boolean) => {
+    updateSetting('notifications', value);
+  }, [updateSetting]);
+
+  const handleDarkModeChange = useCallback((value: boolean) => {
+    updateSetting('darkMode', value);
+  }, [updateSetting]);
+
+  const handleShowHadithChange = useCallback((value: boolean) => {
+    updateSetting('showHadith', value);
+  }, [updateSetting]);
+
+  const openGoalModal = () => {
+    setTempGoal(settings.dailyGoal.toString());
+    setIsGoalModalOpen(true);
+  };
+
+  const saveGoal = () => {
+    const goalNumber = parseInt(tempGoal);
+    if (goalNumber > 0 && goalNumber <= 50) {
+      updateSetting('dailyGoal', goalNumber);
+      setIsGoalModalOpen(false);
+    } else {
+      Alert.alert('Invalid Goal', 'Please enter a number between 1 and 50');
+    }
+  };
+
+  const cancelGoal = () => {
+    setTempGoal(settings.dailyGoal.toString());
+    setIsGoalModalOpen(false);
+  };
 
   // Handle dropdown selection
   const handleFrequencyChange = useCallback((value: number) => {
+    console.log('handleFrequencyChange called with value:', value);
     setCurrentInterval(value);
-    setIsDropdownOpen(false);
+    
     if (debounceTimer.current) {
       clearTimeout(debounceTimer.current);
     }
-    updateSetting('notificationInterval', value);
-  }, [updateSetting]);
+    
+    // Update settings directly without relying on the effect
+    const newSettings = { ...settings, notificationInterval: value };
+    console.log('Saving new settings:', newSettings);
+    saveSettings(newSettings);
+    
+    // Close dropdown with a small delay for smoother UX
+    setTimeout(() => {
+      setIsDropdownOpen(false);
+    }, 150);
+  }, [settings, saveSettings]);
 
   const clearData = async () => {
     try {
@@ -219,7 +283,6 @@ export default function Settings() {
         style={styles.scrollContainer}
         contentContainerStyle={styles.scrollContent} 
         showsVerticalScrollIndicator={false}
-        onTouchStart={() => setIsDropdownOpen(false)}
       >
         {/* Profile Section */}
         <Animated.View 
@@ -231,24 +294,26 @@ export default function Settings() {
             }
           ]}
         >
-          <View style={[styles.profileCard, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
-            <View style={styles.profileInfo}>
-              <View style={[styles.avatar, { backgroundColor: theme.border }]}>
-                <Ionicons name="person-circle" size={24} color="#9ca1ab" style={styles.avatarText} />
+          <Link href="/profile" asChild>
+            <TouchableOpacity style={[styles.profileCard, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
+              <View style={styles.profileInfo}>
+                <View style={[styles.avatar, { backgroundColor: theme.border }]}>
+                  <Ionicons name="person-circle" size={24} color="#9ca1ab" style={styles.avatarText} />
+                </View>
+                <View style={styles.profileDetails}>
+                  <Text style={[styles.profileName, { color: theme.textPrimary, fontFamily: 'Poppins_600SemiBold' }]}>
+                    Daily Deeds User
+                  </Text>
+                  <Text style={[styles.profileSubtitle, { color: theme.textSecondary, fontFamily: 'Poppins_400Regular' }]}>
+                    Keep up the good work!
+                  </Text>
+                </View>
               </View>
-              <View style={styles.profileDetails}>
-                <Text style={[styles.profileName, { color: theme.textPrimary, fontFamily: 'Poppins_600SemiBold' }]}>
-                  Daily Deeds User
-                </Text>
-                <Text style={[styles.profileSubtitle, { color: theme.textSecondary, fontFamily: 'Poppins_400Regular' }]}>
-                  Keep up the good work!
-                </Text>
+              <View style={styles.chevron}>
+                <Ionicons name="chevron-forward" size={24} color="#9ca1ab" style={styles.chevronText} />
               </View>
-            </View>
-            <TouchableOpacity style={styles.chevron}>
-              <Ionicons name="chevron-forward" size={24} color="#9ca1ab" style={styles.chevronText} />
             </TouchableOpacity>
-          </View>
+          </Link>
         </Animated.View>
 
         {/* App Settings */}
@@ -275,7 +340,7 @@ export default function Settings() {
               </View>
               <Switch
                 value={settings.notifications}
-                onValueChange={(value) => updateSetting('notifications', value)}
+                onValueChange={handleNotificationsChange}
                 trackColor={{ false: theme.border, true: theme.accent }}
                 thumbColor={'#ffffff'}
               />
@@ -291,7 +356,7 @@ export default function Settings() {
                     Random Reminders
                   </Text>
                   <Text style={[styles.settingSubtitle, { color: theme.textSecondary, fontFamily: 'Poppins_400Regular' }]}>
-                   
+                    Debug: interval={settings.notificationInterval}, current={currentInterval}
                   </Text>
                 </View>
               </View>
@@ -369,7 +434,7 @@ export default function Settings() {
               </View>
               <Switch
                 value={settings.darkMode}
-                onValueChange={(value) => updateSetting('darkMode', value)}
+                onValueChange={handleDarkModeChange}
                 trackColor={{ false: theme.border, true: theme.accent }}
                 thumbColor={'#ffffff'}
               />
@@ -386,7 +451,7 @@ export default function Settings() {
               </View>
               <Switch
                 value={settings.showHadith}
-                onValueChange={(value) => updateSetting('showHadith', value)}
+                onValueChange={handleShowHadithChange}
                 trackColor={{ false: theme.border, true: theme.accent }}
                 thumbColor={'#ffffff'}
               />
@@ -394,7 +459,7 @@ export default function Settings() {
 
             <View style={[styles.separator, { backgroundColor: theme.border }]} />
 
-            <TouchableOpacity style={styles.settingItem}>
+            <TouchableOpacity style={styles.settingItem} onPress={openGoalModal}>
               <View style={styles.settingLeft}>
                 <Ionicons name="flag" size={24} color="#9ca1ab" style={styles.settingIcon} />
                 <Text style={[styles.settingTitle, { color: theme.textPrimary, fontFamily: 'Poppins_500Medium' }]}>
@@ -558,10 +623,16 @@ export default function Settings() {
                           <Text style={[styles.navText, { color: '#9ca1ab', fontFamily: 'Poppins_500Medium' }]}>Home</Text>
           </TouchableOpacity>
         </Link>
-        <Link href="/home" asChild>
+        <Link href="/progress" asChild>
           <TouchableOpacity style={styles.navItem}>
-                         <Ionicons name="shuffle" size={24} color="#9ca1ab" style={styles.navIcon} />
-                          <Text style={[styles.navText, { color: '#9ca1ab', fontFamily: 'Poppins_500Medium' }]}>Random</Text>
+                         <Ionicons name="analytics" size={24} color="#9ca1ab" style={styles.navIcon} />
+                          <Text style={[styles.navText, { color: '#9ca1ab', fontFamily: 'Poppins_500Medium' }]}>Progress</Text>
+          </TouchableOpacity>
+        </Link>
+        <Link href="/profile" asChild>
+          <TouchableOpacity style={styles.navItem}>
+                         <Ionicons name="person" size={24} color="#9ca1ab" style={styles.navIcon} />
+                          <Text style={[styles.navText, { color: '#9ca1ab', fontFamily: 'Poppins_500Medium' }]}>Profile</Text>
           </TouchableOpacity>
         </Link>
         <TouchableOpacity style={styles.navItem}>
@@ -569,6 +640,52 @@ export default function Settings() {
                        <Text style={[styles.navText, { color: '#0c0c0c', fontFamily: 'Poppins_500Medium' }]}>Settings</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Daily Goal Modal */}
+      <Modal
+        visible={isGoalModalOpen}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={cancelGoal}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: theme.cardBackground }]}>
+            <Text style={[styles.modalTitle, { color: theme.textPrimary, fontFamily: 'Poppins_600SemiBold' }]}>
+              Set Daily Goal
+            </Text>
+            <Text style={[styles.modalSubtitle, { color: theme.textSecondary, fontFamily: 'Poppins_400Regular' }]}>
+              How many good deeds do you want to complete daily?
+            </Text>
+            <TextInput
+              style={[styles.modalInput, { backgroundColor: theme.border, color: theme.textPrimary, fontFamily: 'Poppins_500Medium' }]}
+              value={tempGoal}
+              onChangeText={setTempGoal}
+              placeholder="Enter number (1-50)"
+              placeholderTextColor={theme.textSecondary}
+              keyboardType="numeric"
+              maxLength={2}
+            />
+            <View style={styles.modalActions}>
+              <TouchableOpacity 
+                style={[styles.modalButton, styles.cancelModalButton, { borderColor: theme.border }]}
+                onPress={cancelGoal}
+              >
+                <Text style={[styles.modalButtonText, { color: theme.textSecondary, fontFamily: 'Poppins_500Medium' }]}>
+                  Cancel
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.modalButton, styles.saveModalButton, { backgroundColor: theme.accent }]}
+                onPress={saveGoal}
+              >
+                <Text style={[styles.modalButtonText, { color: '#ffffff', fontFamily: 'Poppins_500Medium' }]}>
+                  Save
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -830,6 +947,63 @@ const styles = StyleSheet.create({
   },
   navText: {
     fontSize: 12,
+    fontWeight: '500',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  modalContent: {
+    borderRadius: 20,
+    padding: 24,
+    width: '100%',
+    maxWidth: 320,
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    textAlign: 'center',
+    marginBottom: 20,
+    lineHeight: 20,
+  },
+  modalInput: {
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+    textAlign: 'center',
+    width: '100%',
+    marginBottom: 20,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+    width: '100%',
+  },
+  modalButton: {
+    flex: 1,
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  cancelModalButton: {
+    borderWidth: 1,
+  },
+  saveModalButton: {
+    // backgroundColor set dynamically
+  },
+  modalButtonText: {
+    fontSize: 16,
     fontWeight: '500',
   },
 }); 

@@ -5,6 +5,8 @@ import {
   AppState,
   AppStateStatus,
   Dimensions,
+  Easing,
+  Image,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -17,7 +19,7 @@ import {
 import { Poppins_400Regular, Poppins_500Medium, Poppins_600SemiBold, Poppins_700Bold, useFonts } from '@expo-google-fonts/poppins';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Link } from 'expo-router';
+import { Link, useFocusEffect } from 'expo-router';
 import { PanGestureHandler, State } from 'react-native-gesture-handler';
 import PagerView from 'react-native-pager-view';
 import { Reminder, remindersData } from '../assets/Reminders';
@@ -84,6 +86,7 @@ export default function Home() {
     dailyGoal: 5,
   });
   const [notificationPermission, setNotificationPermission] = useState<string>('granted'); // For Expo Go compatibility
+  const [profileImage, setProfileImage] = useState<string | null>(null);
   
   // Load fonts
   const [fontsLoaded] = useFonts({
@@ -95,14 +98,45 @@ export default function Home() {
 
   // Animations
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const cardAnimations = useRef(
+    remindersData.map(() => ({
+      scale: new Animated.Value(1),
+      rotation: new Animated.Value(0),
+    }))
+  ).current;
   const pagerRef = useRef<PagerView>(null);
   const appState = useRef(AppState.currentState);
   const reminderInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastTapRef = useRef<{ time: number; index: number } | null>(null);
+  const [particles, setParticles] = useState<Array<{
+    id: string;
+    x: number;
+    y: number;
+    color: string;
+    scale: Animated.Value;
+    opacity: Animated.Value;
+    translateX: Animated.Value;
+    translateY: Animated.Value;
+  }>>([]);
+  const [hearts, setHearts] = useState<Array<{
+    id: string;
+    x: number;
+    y: number;
+    scale: Animated.Value;
+    opacity: Animated.Value;
+  }>>([]);
+  const [completionOverlay, setCompletionOverlay] = useState<{
+    visible: boolean;
+    scale: Animated.Value;
+    messageOpacity: Animated.Value;
+    animation?: any;
+  } | null>(null);
 
   useEffect(() => {
     loadProgress();
     loadSettings();
     loadThemePreference();
+    loadProfileImage();
     setCurrentReminder(remindersData[currentIndex]);
     startAnimations();
     
@@ -130,6 +164,14 @@ export default function Home() {
       stopReminderSystem();
     }
   }, [settings.notificationInterval]);
+
+  // Refresh data when page comes into focus
+  useFocusEffect(
+    React.useCallback(() => {
+      loadProgress();
+      loadProfileImage();
+    }, [])
+  );
 
   const handleAppStateChange = (nextAppState: AppStateStatus) => {
     if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
@@ -346,18 +388,31 @@ export default function Home() {
     }
   };
 
-  const saveProgress = async () => {
+  const loadProfileImage = async () => {
+    try {
+      const savedProfile = await AsyncStorage.getItem('userProfile');
+      if (savedProfile) {
+        const profile = JSON.parse(savedProfile);
+        setProfileImage(profile.profileImage || null);
+      }
+    } catch (error) {
+      console.log('Error loading profile image:', error);
+    }
+  };
+
+  const saveProgress = async (updatedFavorites?: number[]) => {
     try {
       const today = new Date().toDateString();
+      const favoritesToSave = updatedFavorites || favorites;
       const progress: DailyProgress = {
         date: today,
         completedDeeds: completedToday,
-        favorites: favorites,
+        favorites: favoritesToSave,
         currentStreak: streak
       };
       
       await AsyncStorage.setItem('dailyProgress', JSON.stringify(progress));
-      await AsyncStorage.setItem('favorites', JSON.stringify(favorites));
+      await AsyncStorage.setItem('favorites', JSON.stringify(favoritesToSave));
       await AsyncStorage.setItem('streak', streak.toString());
     } catch (error) {
       console.log('Error saving progress:', error);
@@ -442,7 +497,7 @@ export default function Home() {
     }
   };
 
-  const toggleFavorite = () => {
+  const toggleFavorite = async () => {
     let newFavorites;
     if (favorites.includes(currentIndex)) {
       newFavorites = favorites.filter(fav => fav !== currentIndex);
@@ -450,7 +505,7 @@ export default function Home() {
       newFavorites = [...favorites, currentIndex];
     }
     setFavorites(newFavorites);
-    saveProgress();
+    await saveProgress(newFavorites);
   };
 
   const getRandomReminder = () => {
@@ -472,6 +527,257 @@ export default function Home() {
       navigateToCard(randomIndex);
       setRefreshing(false);
     }, 1000);
+  };
+
+  const createCardEdgeParticles = (color: string, count = 8) => {
+    const cardWidth = width * 0.85;
+    const cardHeight = 480;
+    const cardCenterX = width * 0.5;
+    const cardCenterY = height * 0.4;
+    
+    const newParticles = Array.from({ length: count }, (_, i) => {
+      // Position particles around card edges
+      const angle = (i / count) * 2 * Math.PI;
+      const edgeX = cardCenterX + Math.cos(angle) * (cardWidth / 2 - 20);
+      const edgeY = cardCenterY + Math.sin(angle) * (cardHeight / 2 - 20);
+      
+      return {
+        id: `${Date.now()}_${i}`,
+        x: edgeX,
+        y: edgeY,
+        color,
+        scale: new Animated.Value(0),
+        opacity: new Animated.Value(1),
+        translateX: new Animated.Value(0),
+        translateY: new Animated.Value(0),
+      };
+    });
+
+    requestAnimationFrame(() => {
+      setParticles(prev => [...prev, ...newParticles]);
+    });
+
+    // Animate particles outward from edges
+    newParticles.forEach((particle, i) => {
+      const angle = (i / count) * 2 * Math.PI;
+      const outwardX = Math.cos(angle) * 60;
+      const outwardY = Math.sin(angle) * 60;
+      
+      Animated.parallel([
+        Animated.timing(particle.scale, {
+          toValue: 1,
+          duration: 200,
+          easing: Easing.out(Easing.back(1.5)),
+          useNativeDriver: true,
+        }),
+        Animated.timing(particle.translateX, {
+          toValue: outwardX,
+          duration: 1200,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(particle.translateY, {
+          toValue: outwardY,
+          duration: 1200,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.timing(particle.opacity, {
+          toValue: 0,
+          duration: 1200,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+      ]).start(() => {
+        requestAnimationFrame(() => {
+          setParticles(prev => prev.filter(p => p.id !== particle.id));
+        });
+      });
+    });
+  };
+
+  const createHeartAnimation = (x: number, y: number) => {
+    const newHeart = {
+      id: `heart_${Date.now()}`,
+      x,
+      y,
+      scale: new Animated.Value(0),
+      opacity: new Animated.Value(1),
+    };
+
+    requestAnimationFrame(() => {
+      setHearts(prev => [...prev, newHeart]);
+    });
+
+    Animated.sequence([
+      Animated.timing(newHeart.scale, {
+        toValue: 1.5,
+        duration: 400,
+        easing: Easing.out(Easing.back(2)),
+        useNativeDriver: true,
+      }),
+      Animated.parallel([
+        Animated.timing(newHeart.scale, {
+          toValue: 0,
+          duration: 600,
+          easing: Easing.in(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(newHeart.opacity, {
+          toValue: 0,
+          duration: 600,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ]),
+    ]).start(() => {
+      requestAnimationFrame(() => {
+        setHearts(prev => prev.filter(h => h.id !== newHeart.id));
+      });
+    });
+  };
+
+  const createCompletionOverlay = () => {
+    const overlay = {
+      visible: true,
+      scale: new Animated.Value(0),
+      messageOpacity: new Animated.Value(0),
+      animation: null as any,
+    };
+    
+    // Use requestAnimationFrame to avoid useInsertionEffect warning
+    requestAnimationFrame(() => {
+      setCompletionOverlay(overlay);
+      
+      const animation = Animated.sequence([
+        // Circle grows from button position with bounce effect
+        Animated.timing(overlay.scale, {
+          toValue: 1,
+          duration: 600,
+          easing: Easing.out(Easing.back(1.5)),
+          useNativeDriver: false,
+        }),
+        // Message appears with ease in
+        Animated.timing(overlay.messageOpacity, {
+          toValue: 1,
+          duration: 400,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        // Wait a moment
+        Animated.delay(1200),
+        // Hide message before shrinking starts
+        Animated.timing(overlay.messageOpacity, {
+          toValue: 0,
+          duration: 200,
+          easing: Easing.in(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        // Circle shrinks back to button position (no fade)
+        Animated.timing(overlay.scale, {
+          toValue: 0,
+          duration: 800,
+          easing: Easing.in(Easing.back(1.2)),
+          useNativeDriver: false,
+        }),
+      ]);
+      
+      overlay.animation = animation;
+      
+      animation.start(() => {
+        requestAnimationFrame(() => {
+          setCompletionOverlay(null);
+        });
+      });
+    });
+  };
+
+  const handleCompletionSkip = () => {
+    if (completionOverlay?.animation) {
+      completionOverlay.animation.stop();
+      
+      // Quick shrink animation
+      Animated.timing(completionOverlay.scale, {
+        toValue: 0,
+        duration: 200,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: false,
+      }).start(() => {
+        requestAnimationFrame(() => {
+          setCompletionOverlay(null);
+        });
+      });
+    }
+  };
+
+  const animateCard = (index: number, isFavoriteAction = false) => {
+    const randomRotation = (Math.random() - 0.5) * 10;
+    const cardAnim = cardAnimations[index];
+    
+    // Create particles around card edges
+    const particleColor = isFavoriteAction ? '#ff6b6b' : '#2fcc35';
+    createCardEdgeParticles(particleColor);
+    
+    Animated.sequence([
+      Animated.parallel([
+        Animated.timing(cardAnim.scale, {
+          toValue: 0.95,
+          duration: 100,
+          useNativeDriver: true,
+        }),
+        Animated.timing(cardAnim.rotation, {
+          toValue: randomRotation,
+          duration: 100,
+          useNativeDriver: true,
+        }),
+      ]),
+      Animated.parallel([
+        Animated.timing(cardAnim.scale, {
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+        Animated.timing(cardAnim.rotation, {
+          toValue: 0,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+      ]),
+    ]).start();
+  };
+
+  const handleCardDoubleTap = async (index: number, event?: any) => {
+    const now = Date.now();
+    const DOUBLE_TAP_DELAY = 300;
+    
+    // Always animate on tap
+    animateCard(index);
+    
+    if (lastTapRef.current && 
+        lastTapRef.current.index === index && 
+        now - lastTapRef.current.time < DOUBLE_TAP_DELAY) {
+      // Double tap detected - toggle favorite with special animation
+      animateCard(index, true);
+      
+      // Create heart animation at tap location
+      if (event && event.nativeEvent) {
+        createHeartAnimation(event.nativeEvent.pageX, event.nativeEvent.pageY);
+      } else {
+        createHeartAnimation(width * 0.5, height * 0.4);
+      }
+      
+      const newFavorites = favorites.includes(index) 
+        ? favorites.filter(fav => fav !== index)
+        : [...favorites, index];
+      setFavorites(newFavorites);
+      await saveProgress(newFavorites);
+      
+      // Reset to prevent triple tap
+      lastTapRef.current = null;
+    } else {
+      // Single tap - record for potential double tap
+      lastTapRef.current = { time: now, index };
+    }
   };
 
   if (!fontsLoaded || !currentReminder) {
@@ -505,19 +811,30 @@ export default function Home() {
     <View style={[styles.container, { backgroundColor: theme.background }]}>
       {/* Header */}
       <View style={[styles.header, { backgroundColor: theme.background }]}>
-        <TouchableOpacity style={[styles.profileButton, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
-          <View style={[styles.profileAvatar, { backgroundColor: theme.border }]}>
-            <Ionicons name="person" size={20} color="#9ca1ab" />
-          </View>
-        </TouchableOpacity>
+        <Link href="/settings" asChild>
+          <TouchableOpacity style={[styles.settingsButton, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
+                          <Ionicons name="settings" size={24} color="#9ca1ab" style={styles.settingsIcon} />
+          </TouchableOpacity>
+        </Link>
         
         <Text style={[styles.headerTitle, { color: theme.textPrimary, fontFamily: 'Poppins_600SemiBold' }]}>
           Daily Deeds
         </Text>
         
-        <Link href="/settings" asChild>
-          <TouchableOpacity style={[styles.settingsButton, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
-                          <Ionicons name="settings" size={24} color="#9ca1ab" style={styles.settingsIcon} />
+        <Link href="/profile" asChild>
+          <TouchableOpacity style={[styles.profileButton, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
+            <View style={[styles.profileCircle, { backgroundColor: '#9ca2ac' }]}>
+              <View style={[styles.profileAvatar, { backgroundColor: theme.border }]}>
+                {profileImage ? (
+                  <Image 
+                    source={{ uri: profileImage }} 
+                    style={styles.profileImage}
+                  />
+                ) : (
+                  <Ionicons name="person" size={20} color="#9ca1ab" />
+                )}
+              </View>
+            </View>
           </TouchableOpacity>
         </Link>
       </View>
@@ -592,15 +909,30 @@ export default function Home() {
               >
             {remindersData.map((item, index) => (
               <View key={index} style={styles.pagerPage}>
-                <View
-                  style={[
-                    styles.carouselCard,
-                    {
-                      backgroundColor: theme.cardBackground,
-                      borderColor: theme.border,
-                    }
-                  ]}
+                <Animated.View
+                  style={{
+                    transform: [
+                      { scale: cardAnimations[index].scale },
+                      { 
+                        rotate: cardAnimations[index].rotation.interpolate({
+                          inputRange: [-10, 10],
+                          outputRange: ['-10deg', '10deg'],
+                        })
+                      }
+                    ]
+                  }}
                 >
+                  <TouchableOpacity
+                    style={[
+                      styles.carouselCard,
+                      {
+                        backgroundColor: theme.cardBackground,
+                        borderColor: theme.border,
+                      }
+                    ]}
+                    onPress={(event) => handleCardDoubleTap(index, event)}
+                    activeOpacity={0.8}
+                  >
                   <View style={styles.cardHeader}>
                     <View style={styles.headerLeft}>
                       <View style={[styles.categoryBadge, { backgroundColor: theme.border }]}> 
@@ -609,14 +941,17 @@ export default function Home() {
                         </Text>
                       </View>
                     </View>
-                    <TouchableOpacity onPress={() => {
+                    <TouchableOpacity onPress={async () => {
                       const newFavorites = favorites.includes(index) 
                         ? favorites.filter(fav => fav !== index)
                         : [...favorites, index];
                       setFavorites(newFavorites);
-                      saveProgress();
+                      await saveProgress(newFavorites);
+                      
+                      // Create heart particles around the heart icon
+                      createCardEdgeParticles('#ff6b6b', 6);
                     }} style={styles.favoriteButton}>
-                      <Ionicons name={favorites.includes(index) ? "heart" : "heart-outline"} size={24} color="#9ca1ab" style={styles.favoriteIcon} />
+                      <Ionicons name={favorites.includes(index) ? "heart" : "heart-outline"} size={24} color={favorites.includes(index) ? "#ff6b6b" : "#9ca1ab"} style={styles.favoriteIcon} />
                     </TouchableOpacity>
                   </View>
 
@@ -653,25 +988,62 @@ export default function Home() {
                           marginBottom: 0
                         }
                       ]} 
-                      onPress={() => {
-                        if (!completedToday.includes(index)) {
-                          const newCompleted = [...completedToday, index];
-                          setCompletedToday(newCompleted);
-                          setTotalCompleted(newCompleted.length);
-                          if (newCompleted.length === 1) {
-                            setStreak(streak + 1);
+                      onPress={async () => {
+                        let newCompleted;
+                        let newStreak = streak;
+                        
+                        if (completedToday.includes(index)) {
+                          // Remove from completed
+                          newCompleted = completedToday.filter(id => id !== index);
+                          
+                          // Decrease streak if this was the only completed deed today
+                          if (completedToday.length === 1 && streak > 0) {
+                            newStreak = streak - 1;
+                            setStreak(newStreak);
                           }
-                          saveProgress();
+                        } else {
+                          // Add to completed
+                          newCompleted = [...completedToday, index];
+                          
+                          // Update streak if this is the first deed today
+                          if (newCompleted.length === 1) {
+                            newStreak = streak + 1;
+                            setStreak(newStreak);
+                          }
+                        }
+                        
+                        setCompletedToday(newCompleted);
+                        setTotalCompleted(newCompleted.length);
+                        
+                        // Show completion overlay for new completions
+                        if (!completedToday.includes(index)) {
+                          createCompletionOverlay();
+                        }
+                        
+                        // Save progress with updated data
+                        try {
+                          const today = new Date().toDateString();
+                          const progress = {
+                            date: today,
+                            completedDeeds: newCompleted,
+                            favorites: favorites,
+                            currentStreak: newStreak
+                          };
+                          
+                          await AsyncStorage.setItem('dailyProgress', JSON.stringify(progress));
+                          await AsyncStorage.setItem('streak', newStreak.toString());
+                        } catch (error) {
+                          console.log('Error saving progress:', error);
                         }
                       }}
-                      disabled={completedToday.includes(index)}
                     >
                       <Text style={[styles.buttonText, { fontFamily: 'Poppins_600SemiBold' }]}> 
-                        {completedToday.includes(index) ? "✓ Completed!" : "I Did It!"}
+                        {completedToday.includes(index) ? "✓ Tap to Undo" : "I Did It!"}
                       </Text>
                     </TouchableOpacity>
                   </View>
-                </View>
+                  </TouchableOpacity>
+                </Animated.View>
               </View>
             ))}
               </PagerView>
@@ -719,18 +1091,98 @@ export default function Home() {
                                                <Ionicons name="home" size={24} color="#0c0c0c" style={styles.navIcon} />
                        <Text style={[styles.navText, { color: '#0c0c0c', fontFamily: 'Poppins_600SemiBold' }]}>Home</Text>
           </TouchableOpacity>
-        <TouchableOpacity style={styles.navItem} onPress={onRefresh} disabled={refreshing}>
-          <Ionicons name={refreshing ? "refresh" : "shuffle"} size={24} color="#9ca1ab" style={styles.navIcon} />
-          <Text style={[styles.navText, { color: '#9ca1ab', fontFamily: 'Poppins_600SemiBold' }]}>
-            {refreshing ? 'Loading' : 'Random'}
-          </Text>
-        </TouchableOpacity>
-        <Link href="/settings" asChild>
+        <Link href="/progress" asChild>
           <TouchableOpacity style={styles.navItem}>
-                         <Ionicons name="settings" size={24} color="#9ca1ab" style={styles.navIcon} />
-                          <Text style={[styles.navText, { color: '#9ca1ab', fontFamily: 'Poppins_600SemiBold' }]}>Settings</Text>
+            <Ionicons name="analytics" size={24} color="#9ca1ab" style={styles.navIcon} />
+            <Text style={[styles.navText, { color: '#9ca1ab', fontFamily: 'Poppins_600SemiBold' }]}>
+              Progress
+            </Text>
           </TouchableOpacity>
         </Link>
+        <Link href="/profile" asChild>
+          <TouchableOpacity style={styles.navItem}>
+                         <Ionicons name="person" size={24} color="#9ca1ab" style={styles.navIcon} />
+                          <Text style={[styles.navText, { color: '#9ca1ab', fontFamily: 'Poppins_600SemiBold' }]}>Profile</Text>
+          </TouchableOpacity>
+        </Link>
+        <Link href="/favorites" asChild>
+          <TouchableOpacity style={styles.navItem}>
+                         <Ionicons name="heart" size={24} color="#9ca1ab" style={styles.navIcon} />
+                          <Text style={[styles.navText, { color: '#9ca1ab', fontFamily: 'Poppins_600SemiBold' }]}>Favorites</Text>
+          </TouchableOpacity>
+        </Link>
+      </View>
+
+      {/* Completion Overlay */}
+      {completionOverlay && (
+        <TouchableOpacity 
+          style={styles.completionOverlay} 
+          onPress={handleCompletionSkip}
+          activeOpacity={1}
+        >
+          <Animated.View
+            style={[
+              styles.completionCircle,
+              {
+                transform: [{ scale: completionOverlay.scale }],
+              }
+            ]}
+          />
+          <Animated.View
+            style={[
+              styles.completionMessage,
+              { opacity: completionOverlay.messageOpacity }
+            ]}
+          >
+            <Ionicons name="heart" size={32} color="#ffffff" />
+            <Text style={[styles.completionText, { fontFamily: 'Poppins_600SemiBold' }]}>
+              Well Done!
+            </Text>
+          </Animated.View>
+        </TouchableOpacity>
+      )}
+
+      {/* Heart Animations */}
+      <View style={styles.heartOverlay} pointerEvents="none">
+        {hearts.map(heart => (
+          <Animated.View
+            key={heart.id}
+            style={[
+              styles.heartAnimation,
+              {
+                left: heart.x - 20,
+                top: heart.y - 20,
+                transform: [{ scale: heart.scale }],
+                opacity: heart.opacity,
+              }
+            ]}
+          >
+            <Ionicons name="heart" size={40} color="#ff6b6b" />
+          </Animated.View>
+        ))}
+      </View>
+
+      {/* Particle Overlay */}
+      <View style={styles.particleOverlay} pointerEvents="none">
+        {particles.map(particle => (
+          <Animated.View
+            key={particle.id}
+            style={[
+              styles.particle,
+              {
+                left: particle.x,
+                top: particle.y,
+                backgroundColor: particle.color,
+                transform: [
+                  { scale: particle.scale },
+                  { translateX: particle.translateX },
+                  { translateY: particle.translateY },
+                ],
+                opacity: particle.opacity,
+              }
+            ]}
+          />
+        ))}
       </View>
     </View>
   );
@@ -749,19 +1201,33 @@ const styles = StyleSheet.create({
     paddingBottom: 20,
   },
   profileButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
   },
-  profileAvatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+  profileCircle: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     justifyContent: 'center',
     alignItems: 'center',
+    padding: 4,
+  },
+  profileAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  profileImage: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
   },
   headerTitle: {
     fontSize: 20,
@@ -770,9 +1236,9 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   settingsButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
@@ -1038,5 +1504,66 @@ const styles = StyleSheet.create({
   navText: {
     fontSize: 12,
     fontWeight: '500',
+  },
+  particleOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 1000,
+  },
+  particle: {
+    position: 'absolute',
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  completionOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 2000,
+  },
+  completionCircle: {
+    position: 'absolute',
+    width: Math.max(width, height) * 2, // Large enough to cover entire screen
+    height: Math.max(width, height) * 2,
+    borderRadius: Math.max(width, height),
+    backgroundColor: '#2fcc35',
+    top: height * 0.7 - Math.max(width, height), // Start from button position
+    left: width * 0.5 - Math.max(width, height),
+  },
+  completionMessage: {
+    position: 'absolute',
+    top: height * 0.5 - 50, // Center vertically on screen
+    left: width * 0.5 - 100, // Center horizontally on screen
+    width: 200,
+    height: 100,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  completionText: {
+    color: '#ffffff',
+    fontSize: 24,
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  heartOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 1500,
+  },
+  heartAnimation: {
+    position: 'absolute',
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 });
