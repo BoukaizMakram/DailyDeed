@@ -246,7 +246,7 @@ export default function Favorites() {
               onPress={() => setShowCompletedModal(true)}
             >
               <Text style={[styles.statNumber, { color: '#ffffff', fontFamily: 'Poppins_700Bold' }]}>
-                {favorites.filter(fav => completedToday.includes(fav)).length}
+                {completedToday.length}
               </Text>
               <Text style={[styles.statLabel, { color: '#ffffff', fontFamily: 'Poppins_400Regular' }]}>
                 Completed
@@ -414,15 +414,21 @@ export default function Favorites() {
             </View>
             
             <ScrollView style={styles.modalList} showsVerticalScrollIndicator={false}>
-              {favorites.filter(fav => completedToday.includes(fav)).length > 0 ? (
-                favorites.filter(fav => completedToday.includes(fav)).map((favoriteIndex) => {
-                  const reminder = remindersData[favoriteIndex];
+              {completedToday.length > 0 ? (
+                completedToday.map((completedIndex) => {
+                  const reminder = remindersData[completedIndex];
+                  const isFavorite = favorites.includes(completedIndex);
                   return (
-                    <View key={favoriteIndex} style={[styles.modalItem, { borderColor: theme.border }]}>
-                      <View style={[styles.modalItemCategory, { backgroundColor: theme.border }]}>
-                        <Text style={[styles.modalItemCategoryText, { color: '#6f7781', fontFamily: 'Poppins_500Medium' }]}>
-                          {reminder.category}
-                        </Text>
+                    <View key={completedIndex} style={[styles.modalItem, { borderColor: theme.border }]}>
+                      <View style={styles.modalItemHeader}>
+                        <View style={[styles.modalItemCategory, { backgroundColor: theme.border }]}>
+                          <Text style={[styles.modalItemCategoryText, { color: '#6f7781', fontFamily: 'Poppins_500Medium' }]}>
+                            {reminder.category}
+                          </Text>
+                        </View>
+                        {isFavorite && (
+                          <Ionicons name="heart" size={16} color="#ff6b6b" />
+                        )}
                       </View>
                       <Text style={[styles.modalItemText, { color: theme.textPrimary, fontFamily: 'Poppins_500Medium' }]}>
                         {reminder.reminder}
@@ -440,7 +446,7 @@ export default function Favorites() {
                 <View style={styles.modalEmptyState}>
                   <Ionicons name="checkmark-circle-outline" size={48} color={theme.textSecondary} />
                   <Text style={[styles.modalEmptyText, { color: theme.textSecondary, fontFamily: 'Poppins_500Medium' }]}>
-                    No favorite deeds completed today
+                    No deeds completed today
                   </Text>
                 </View>
               )}
@@ -708,12 +714,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     marginBottom: 12,
   },
+  modalItemHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
   modalItemCategory: {
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
     alignSelf: 'flex-start',
-    marginBottom: 8,
   },
   modalItemCategoryText: {
     fontSize: 10,

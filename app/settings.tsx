@@ -1,6 +1,7 @@
 import { Poppins_400Regular, Poppins_500Medium, Poppins_600SemiBold, Poppins_700Bold, useFonts } from '@expo-google-fonts/poppins';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 
 import { Link } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -34,6 +35,7 @@ export default function Settings() {
     dailyGoal: 5,
   });
   const [isDarkMode, setIsDarkMode] = useState(systemColorScheme === 'dark');
+  const [isExpoGo, setIsExpoGo] = useState<boolean>(false);
   
   // Single source of truth for interval display
   const [currentInterval, setCurrentInterval] = useState(0);
@@ -67,6 +69,8 @@ export default function Settings() {
 
   useEffect(() => {
     loadSettings();
+    // Check if running in Expo Go
+    setIsExpoGo(Constants.appOwnership === 'expo');
     startAnimations();
     
     // Cleanup function to clear debounce timer
@@ -422,6 +426,18 @@ export default function Settings() {
                 </View>
               )}
             </View>
+
+            {/* Expo Go Warning for Notifications */}
+            {isExpoGo && settings.notificationInterval > 0 && (
+              <View style={[styles.warningContainer, { backgroundColor: '#ffa500' + '20', borderColor: '#ffa500' }]}>
+                <View style={styles.warningContent}>
+                  <Ionicons name="build-outline" size={20} color="#ffa500" />
+                  <Text style={[styles.warningText, { color: theme.textPrimary, fontFamily: 'Poppins_400Regular' }]}>
+                    Background notifications require a development build. In-app reminders will work when the app is open.
+                  </Text>
+                </View>
+              </View>
+            )}
 
             <View style={[styles.separator, { backgroundColor: theme.border }]} />
 
@@ -1005,5 +1021,21 @@ const styles = StyleSheet.create({
   modalButtonText: {
     fontSize: 16,
     fontWeight: '500',
+  },
+  warningContainer: {
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 12,
+    marginVertical: 8,
+  },
+  warningContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  warningText: {
+    fontSize: 14,
+    flex: 1,
+    lineHeight: 20,
   },
 }); 

@@ -21,9 +21,9 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Link, useFocusEffect } from 'expo-router';
 import { PanGestureHandler, State } from 'react-native-gesture-handler';
-import PagerView from 'react-native-pager-view';
 import { Reminder, remindersData } from '../assets/Reminders';
-// import * as Notifications from 'expo-notifications'; // Commented out for Expo Go compatibility
+import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
 
 
 const { width, height } = Dimensions.get('window');
@@ -53,20 +53,20 @@ interface ThemeColors {
   navbar: string;
 }
 
-// Alternative notification system for Expo Go
-// When ready for development build, uncomment the expo-notifications code below
-/*
-// Configure how notifications are handled when app is in foreground
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
-*/
+// Configure how notifications are handled when app is in foreground (only for development builds)
+try {
+  if (Constants.appOwnership !== 'expo') {
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowAlert: true,
+        shouldPlaySound: true,
+        shouldSetBadge: false,
+      }),
+    });
+  }
+} catch (error) {
+  console.log('Notification handler setup skipped (Expo Go)');
+}
 
 export default function Home() {
   const systemColorScheme = useColorScheme();
@@ -85,7 +85,8 @@ export default function Home() {
     showHadith: true,
     dailyGoal: 5,
   });
-  const [notificationPermission, setNotificationPermission] = useState<string>('granted'); // For Expo Go compatibility
+  const [notificationPermission, setNotificationPermission] = useState<string>('undetermined');
+  const [isExpoGo, setIsExpoGo] = useState<boolean>(false);
   const [profileImage, setProfileImage] = useState<string | null>(null);
   
   // Load fonts
@@ -104,7 +105,6 @@ export default function Home() {
       rotation: new Animated.Value(0),
     }))
   ).current;
-  const pagerRef = useRef<PagerView>(null);
   const appState = useRef(AppState.currentState);
   const reminderInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastTapRef = useRef<{ time: number; index: number } | null>(null);
@@ -131,6 +131,14 @@ export default function Home() {
     messageOpacity: Animated.Value;
     animation?: any;
   } | null>(null);
+  
+  // Pan gesture state for card following (horizontal only)
+  const panX = useRef(new Animated.Value(0)).current;
+  
+  // Card transition animation
+  const cardOpacity = useRef(new Animated.Value(1)).current;
+  const cardScale = useRef(new Animated.Value(1)).current;
+  const cardSlideX = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     loadProgress();
@@ -138,6 +146,7 @@ export default function Home() {
     loadThemePreference();
     loadProfileImage();
     setCurrentReminder(remindersData[currentIndex]);
+    checkEnvironmentAndPermissions();
     startAnimations();
     
     // Handle app state changes
@@ -160,10 +169,25 @@ export default function Home() {
     // Start or stop reminder interval based on settings
     if (settings.notificationInterval > 0) {
       startReminderSystem();
+      // Schedule background notifications (only works in development builds)
+      if (notificationPermission === 'granted' && !isExpoGo) {
+        scheduleRandomReminderNotifications();
+      }
     } else {
       stopReminderSystem();
+      // Cancel background notifications
+      if (!isExpoGo) {
+        cancelAllRandomReminderNotifications();
+      }
     }
-  }, [settings.notificationInterval]);
+  }, [settings.notificationInterval, notificationPermission, isExpoGo]);
+
+  // Check permissions after settings are loaded
+  useEffect(() => {
+    if (settings.notifications && settings.notificationInterval > 0) {
+      checkAndRequestPermissions();
+    }
+  }, [settings.notifications, settings.notificationInterval]);
 
   // Refresh data when page comes into focus
   useFocusEffect(
@@ -241,41 +265,169 @@ export default function Home() {
     );
   };
 
-  // For development build, uncomment this function:
-  /*
-  const requestNotificationPermissions = async () => {
+  const checkEnvironmentAndPermissions = async () => {
     try {
-      const { status: existingStatus } = await Notifications.getPermissionsAsync();
-      let finalStatus = existingStatus;
+      // Check if running in Expo Go
+      const isRunningInExpoGo = Constants.appOwnership === 'expo';
+      setIsExpoGo(isRunningInExpoGo);
       
-      if (existingStatus !== 'granted') {
-        const { status } = await Notifications.requestPermissionsAsync({
-          ios: {
-            allowAlert: true,
-            allowBadge: false,
-            allowSound: true,
-            allowDisplayInCarPlay: false,
-            allowCriticalAlerts: false,
-            provideAppNotificationSettings: false,
-            allowProvisional: false,
-          },
-        });
-        finalStatus = status;
-      }
-      
-      setNotificationPermission(finalStatus);
-      
-      if (finalStatus !== 'granted') {
-        console.log('Notification permissions not granted');
+      if (isRunningInExpoGo) {
+        console.log('Running in Expo Go - Background notifications not available');
+        setNotificationPermission('expo-go-limitation');
         return;
       }
       
-      console.log('Local notification permissions granted');
+      // Only call notification APIs in development builds
+      try {
+        const { status } = await Notifications.getPermissionsAsync();
+        setNotificationPermission(status);
+      } catch (notificationError) {
+        console.log('Notification API error (likely Expo Go):', notificationError);
+        setNotificationPermission('expo-go-limitation');
+        setIsExpoGo(true);
+      }
     } catch (error) {
-      console.log('Error requesting notification permissions:', error);
+      console.log('Error checking environment and permissions:', error);
+      setNotificationPermission('error');
     }
   };
-  */
+
+  const checkNotificationPermissions = async () => {
+    try {
+      // Check environment first
+      const isRunningInExpoGo = Constants.appOwnership === 'expo';
+      if (isRunningInExpoGo || isExpoGo) {
+        setNotificationPermission('expo-go-limitation');
+        setIsExpoGo(true);
+        return;
+      }
+      
+      try {
+        const { status } = await Notifications.getPermissionsAsync();
+        setNotificationPermission(status);
+      } catch (notificationError) {
+        console.log('Notification API error (likely Expo Go):', notificationError);
+        setNotificationPermission('expo-go-limitation');
+        setIsExpoGo(true);
+      }
+    } catch (error) {
+      console.log('Error checking notification permissions:', error);
+    }
+  };
+
+  const checkAndRequestPermissions = async () => {
+    try {
+      // Check environment first
+      const isRunningInExpoGo = Constants.appOwnership === 'expo';
+      if (isRunningInExpoGo || isExpoGo) {
+        setNotificationPermission('expo-go-limitation');
+        setIsExpoGo(true);
+        return;
+      }
+      
+      try {
+        const { status } = await Notifications.getPermissionsAsync();
+        setNotificationPermission(status);
+        
+        // If permissions not granted and notifications are enabled in settings, show permission request
+        if (status !== 'granted' && settings.notifications && settings.notificationInterval > 0) {
+          setTimeout(() => {
+            Alert.alert(
+              'Enable Notifications',
+              'DailyDeeds would like to send you reminders to help you stay consistent with your daily deeds. You can change this in Settings later.',
+              [
+                {
+                  text: 'Not Now',
+                  style: 'cancel',
+                  onPress: () => setNotificationPermission('denied')
+                },
+                {
+                  text: 'Allow',
+                  onPress: requestNotificationPermissions
+                }
+              ]
+            );
+          }, 1500); // Delay to ensure UI is ready
+        }
+      } catch (notificationError) {
+        console.log('Notification API error (likely Expo Go):', notificationError);
+        setNotificationPermission('expo-go-limitation');
+        setIsExpoGo(true);
+      }
+    } catch (error) {
+      console.log('Error checking notification permissions:', error);
+    }
+  };
+
+  const requestNotificationPermissions = async () => {
+    try {
+      // Check environment first
+      const isRunningInExpoGo = Constants.appOwnership === 'expo';
+      if (isRunningInExpoGo || isExpoGo) {
+        console.log('Cannot request permissions in Expo Go');
+        setNotificationPermission('expo-go-limitation');
+        setIsExpoGo(true);
+        return false;
+      }
+      
+      try {
+        const { status: existingStatus } = await Notifications.getPermissionsAsync();
+        let finalStatus = existingStatus;
+        
+        if (existingStatus !== 'granted') {
+          const { status } = await Notifications.requestPermissionsAsync({
+            ios: {
+              allowAlert: true,
+              allowBadge: true,
+              allowSound: true,
+              allowDisplayInCarPlay: false,
+              allowCriticalAlerts: false,
+              provideAppNotificationSettings: false,
+              allowProvisional: false,
+              allowAnnouncements: false,
+            },
+          });
+          finalStatus = status;
+        }
+        
+        setNotificationPermission(finalStatus);
+        
+        if (finalStatus !== 'granted') {
+          console.log('Notification permissions not granted');
+          Alert.alert(
+            'Permissions Required',
+            'To receive reminders, please enable notifications in your device settings.',
+            [
+              {
+                text: 'Settings',
+                onPress: () => Notifications.openNotificationSettingsAsync?.()
+              },
+              {
+                text: 'Cancel',
+                style: 'cancel'
+              }
+            ]
+          );
+          return false;
+        }
+        
+        console.log('Local notification permissions granted');
+        // Schedule notifications if interval is set
+        if (settings.notificationInterval > 0) {
+          scheduleRandomReminderNotifications();
+        }
+        return true;
+      } catch (notificationError) {
+        console.log('Notification API error (likely Expo Go):', notificationError);
+        setNotificationPermission('expo-go-limitation');
+        setIsExpoGo(true);
+        return false;
+      }
+    } catch (error) {
+      console.log('Error requesting notification permissions:', error);
+      return false;
+    }
+  };
 
   const loadSettings = async () => {
     try {
@@ -289,14 +441,31 @@ export default function Home() {
     }
   };
 
-  // For development build, uncomment these functions:
-  /*
   const scheduleRandomReminderNotifications = async () => {
     try {
+      // Check environment first
+      const isRunningInExpoGo = Constants.appOwnership === 'expo';
+      if (isRunningInExpoGo || isExpoGo) {
+        console.log('Background notifications not available in Expo Go');
+        return;
+      }
+      
       await cancelAllRandomReminderNotifications();
       
       if (settings.notificationInterval === 0) {
         console.log('Notifications disabled, not scheduling any');
+        return;
+      }
+
+      // Check if permissions are granted (with try-catch for Expo Go)
+      try {
+        const { status } = await Notifications.getPermissionsAsync();
+        if (status !== 'granted') {
+          console.log('Notifications not granted, cannot schedule');
+          return;
+        }
+      } catch (notificationError) {
+        console.log('Notification API error (likely Expo Go):', notificationError);
         return;
       }
       
@@ -333,20 +502,30 @@ export default function Home() {
 
   const cancelAllRandomReminderNotifications = async () => {
     try {
-      const scheduledNotifications = await Notifications.getAllScheduledNotificationsAsync();
-      
-      for (const notification of scheduledNotifications) {
-        if (notification.content.data?.type === 'random_reminder') {
-          await Notifications.cancelScheduledNotificationAsync(notification.identifier);
-        }
+      // Check environment first
+      const isRunningInExpoGo = Constants.appOwnership === 'expo';
+      if (isRunningInExpoGo || isExpoGo) {
+        console.log('Background notifications not available in Expo Go');
+        return;
       }
       
-      console.log('Cancelled all random reminder notifications');
+      try {
+        const scheduledNotifications = await Notifications.getAllScheduledNotificationsAsync();
+        
+        for (const notification of scheduledNotifications) {
+          if (notification.content.data?.type === 'random_reminder') {
+            await Notifications.cancelScheduledNotificationAsync(notification.identifier);
+          }
+        }
+        
+        console.log('Cancelled all random reminder notifications');
+      } catch (notificationError) {
+        console.log('Notification API error (likely Expo Go):', notificationError);
+      }
     } catch (error) {
       console.log('Error cancelling random reminder notifications:', error);
     }
   };
-  */
 
   const loadProgress = async () => {
     try {
@@ -437,49 +616,97 @@ export default function Home() {
   };
 
 
-  // Carousel navigation helper
+  // Carousel navigation helper with transition animation
   const navigateToCard = (targetIndex: number) => {
+    navigateToCardWithDirection(targetIndex, 'none');
+  };
+
+  const navigateToCardWithDirection = (targetIndex: number, direction: 'left' | 'right' | 'none') => {
     if (targetIndex >= 0 && targetIndex < remindersData.length) {
-      pagerRef.current?.setPage(targetIndex);
-      setCurrentIndex(targetIndex);
-      setCurrentReminder(remindersData[targetIndex]);
+      const slideOffset = direction === 'left' ? 50 : direction === 'right' ? -50 : 0;
+      
+      // Animate out current card
+      Animated.parallel([
+        Animated.timing(cardOpacity, {
+          toValue: 0,
+          duration: 150,
+          useNativeDriver: false,
+        }),
+        Animated.timing(cardScale, {
+          toValue: 0.9,
+          duration: 150,
+          useNativeDriver: false,
+        }),
+        Animated.timing(cardSlideX, {
+          toValue: -slideOffset, // Slide out in opposite direction
+          duration: 150,
+          useNativeDriver: false,
+        }),
+      ]).start(() => {
+        // Update card content
+        setCurrentIndex(targetIndex);
+        setCurrentReminder(remindersData[targetIndex]);
+        
+        // Set initial position for new card
+        cardSlideX.stopAnimation();
+        cardSlideX.setValue(slideOffset); // Start from slide direction
+        
+        // Animate in new card
+        Animated.parallel([
+          Animated.timing(cardOpacity, {
+            toValue: 1,
+            duration: 200,
+            useNativeDriver: false,
+          }),
+          Animated.timing(cardScale, {
+            toValue: 1,
+            duration: 200,
+            useNativeDriver: false,
+          }),
+          Animated.timing(cardSlideX, {
+            toValue: 0, // Slide to center
+            duration: 200,
+            useNativeDriver: false,
+          }),
+        ]).start();
+      });
     }
   };
 
-  // Handle page changes from swipe gestures
-  const handlePageSelected = (event: any) => {
-    const newIndex = event.nativeEvent.position;
-    setCurrentIndex(newIndex);
-    setCurrentReminder(remindersData[newIndex]);
-  };
 
-  // Gesture handler for better touch detection
-  const onPanGestureEvent = (event: any) => {
-    const { translationX, translationY, velocityX, velocityY } = event.nativeEvent;
-    
-    // Determine if this is primarily a horizontal gesture
-    const isHorizontalGesture = Math.abs(translationX) > Math.abs(translationY) * 1.5;
-    const hasHorizontalVelocity = Math.abs(velocityX) > Math.abs(velocityY);
-    
-    if (isHorizontalGesture || hasHorizontalVelocity) {
-      // Allow PagerView to handle this gesture
-      return;
-    }
-  };
+  // Gesture handler for card following finger movement (horizontal only)
+  const onPanGestureEvent = Animated.event(
+    [{ nativeEvent: { translationX: panX } }],
+    { useNativeDriver: false }
+  );
 
   const onHandlerStateChange = (event: any) => {
-    if (event.nativeEvent.state === State.END) {
-      const { translationX, velocityX } = event.nativeEvent;
-      const threshold = width * 0.2;
+    const { state, translationX, velocityX } = event.nativeEvent;
+    
+    if (state === State.END) {
+      const threshold = width * 0.25;
+      const velocityThreshold = 500;
       
-      // Only navigate if it's clearly a horizontal swipe
-      if (Math.abs(translationX) > threshold) {
+      // Determine if we should navigate to next/previous card
+      const shouldNavigate = Math.abs(translationX) > threshold || Math.abs(velocityX) > velocityThreshold;
+      
+      if (shouldNavigate) {
         if (translationX > 0 && currentIndex > 0) {
-          navigateToCard(currentIndex - 1);
+          // Swipe right - go to previous card
+          navigateToCardWithDirection(currentIndex - 1, 'right');
         } else if (translationX < 0 && currentIndex < remindersData.length - 1) {
-          navigateToCard(currentIndex + 1);
+          // Swipe left - go to next card
+          navigateToCardWithDirection(currentIndex + 1, 'left');
         }
       }
+      
+      // Spring back to center position
+      Animated.spring(panX, {
+        toValue: 0,
+        useNativeDriver: false,
+        tension: 100,
+        friction: 8,
+      }).start();
     }
   };
 
@@ -723,24 +950,24 @@ export default function Home() {
         Animated.timing(cardAnim.scale, {
           toValue: 0.95,
           duration: 100,
-          useNativeDriver: true,
+          useNativeDriver: false,
         }),
         Animated.timing(cardAnim.rotation, {
           toValue: randomRotation,
           duration: 100,
-          useNativeDriver: true,
+          useNativeDriver: false,
         }),
       ]),
       Animated.parallel([
         Animated.timing(cardAnim.scale, {
           toValue: 1,
           duration: 200,
-          useNativeDriver: true,
+          useNativeDriver: false,
         }),
         Animated.timing(cardAnim.rotation, {
           toValue: 0,
           duration: 200,
-          useNativeDriver: true,
+          useNativeDriver: false,
         }),
       ]),
     ]).start();
@@ -860,22 +1087,40 @@ export default function Home() {
         {settings.notificationInterval > 0 && notificationPermission !== 'granted' && (
           <View style={[styles.permissionNotice, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
             <View style={styles.permissionContent}>
-              <Ionicons name="notifications-off" size={24} color="#ff6b6b" />
+              <Ionicons 
+                name={notificationPermission === 'expo-go-limitation' ? 'build-outline' : 'notifications-off'} 
+                size={24} 
+                color={notificationPermission === 'expo-go-limitation' ? '#ffa500' : '#ff6b6b'} 
+              />
               <View style={styles.permissionText}>
                 <Text style={[styles.permissionTitle, { color: theme.textPrimary, fontFamily: 'Poppins_600SemiBold' }]}>
-                  Notification Permission Required
+                  {notificationPermission === 'expo-go-limitation' 
+                    ? 'Development Build Required' 
+                    : 'Notification Permission Required'}
                 </Text>
                 <Text style={[styles.permissionDescription, { color: theme.textSecondary, fontFamily: 'Poppins_400Regular' }]}>
-                  Please enable notifications to receive reminders every {formatIntervalText(settings.notificationInterval).toLowerCase()}, even when the app is closed.
+                  {notificationPermission === 'expo-go-limitation' 
+                    ? 'Background notifications require a development build. They don\'t work in Expo Go. Visit expo.dev/develop/development-builds to learn more.'
+                    : `Please enable notifications to receive reminders every ${formatIntervalText(settings.notificationInterval).toLowerCase()}, even when the app is closed.`}
                 </Text>
               </View>
             </View>
             <TouchableOpacity 
               style={[styles.permissionButton, { backgroundColor: theme.accent }]}
-              onPress={() => Alert.alert('Enable Notifications', 'Please enable notifications in your device settings.', [{ text: 'OK' }])}
+              onPress={notificationPermission === 'expo-go-limitation' 
+                ? () => Alert.alert(
+                    'Development Build Required',
+                    'Background notifications are not supported in Expo Go due to SDK 53 limitations. To enable notifications:\n\n1. Create a development build\n2. Install it on your device\n3. Background notifications will work\n\nFor now, in-app reminders will continue to work when the app is open.',
+                    [
+                      { text: 'Learn More', onPress: () => console.log('Open development builds docs') },
+                      { text: 'OK', style: 'cancel' }
+                    ]
+                  )
+                : requestNotificationPermissions
+              }
             >
               <Text style={[styles.permissionButtonText, { fontFamily: 'Poppins_500Medium' }]}>
-                Enable
+                {notificationPermission === 'expo-go-limitation' ? 'Learn More' : 'Enable'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -883,7 +1128,7 @@ export default function Home() {
 
        
 
-        {/* PagerView Carousel */}
+        {/* Card Carousel with Custom Swipe */}
         <View style={styles.carouselContainer}>
           <Animated.View style={{ opacity: fadeAnim }}>
             <PanGestureHandler
@@ -894,27 +1139,18 @@ export default function Home() {
               avgTouches={true}
               shouldCancelWhenOutside={false}
               activeOffsetX={[-10, 10]}
-              activeOffsetY={[-50, 50]}
-              failOffsetY={[-50, 50]}
+              activeOffsetY={[-1000, 1000]}
             >
-              <PagerView
-                ref={pagerRef}
-                style={styles.pagerView}
-                initialPage={currentIndex}
-                onPageSelected={handlePageSelected}
-                orientation="horizontal"
-                scrollEnabled={true}
-                overdrag={true}
-                pageMargin={0}
-              >
-            {remindersData.map((item, index) => (
-              <View key={index} style={styles.pagerPage}>
+              <View style={styles.cardContainer}>
+                {/* Current Card */}
                 <Animated.View
                   style={{
+                    opacity: cardOpacity,
                     transform: [
-                      { scale: cardAnimations[index].scale },
+                      { translateX: Animated.add(panX, cardSlideX) },
+                      { scale: Animated.multiply(cardScale, cardAnimations[currentIndex].scale) },
                       { 
-                        rotate: cardAnimations[index].rotation.interpolate({
+                        rotate: cardAnimations[currentIndex].rotation.interpolate({
                           inputRange: [-10, 10],
                           outputRange: ['-10deg', '10deg'],
                         })
@@ -930,28 +1166,28 @@ export default function Home() {
                         borderColor: theme.border,
                       }
                     ]}
-                    onPress={(event) => handleCardDoubleTap(index, event)}
+                    onPress={(event) => handleCardDoubleTap(currentIndex, event)}
                     activeOpacity={0.8}
                   >
                   <View style={styles.cardHeader}>
                     <View style={styles.headerLeft}>
                       <View style={[styles.categoryBadge, { backgroundColor: theme.border }]}> 
                         <Text style={[styles.categoryText, { color: '#6f7781', fontFamily: 'Poppins_500Medium' }]}> 
-                          {item.category}
+                          {currentReminder.category}
                         </Text>
                       </View>
                     </View>
                     <TouchableOpacity onPress={async () => {
-                      const newFavorites = favorites.includes(index) 
-                        ? favorites.filter(fav => fav !== index)
-                        : [...favorites, index];
+                      const newFavorites = favorites.includes(currentIndex) 
+                        ? favorites.filter(fav => fav !== currentIndex)
+                        : [...favorites, currentIndex];
                       setFavorites(newFavorites);
                       await saveProgress(newFavorites);
                       
                       // Create heart particles around the heart icon
                       createCardEdgeParticles('#ff6b6b', 6);
                     }} style={styles.favoriteButton}>
-                      <Ionicons name={favorites.includes(index) ? "heart" : "heart-outline"} size={24} color={favorites.includes(index) ? "#ff6b6b" : "#9ca1ab"} style={styles.favoriteIcon} />
+                      <Ionicons name={favorites.includes(currentIndex) ? "heart" : "heart-outline"} size={24} color={favorites.includes(currentIndex) ? "#ff6b6b" : "#9ca1ab"} style={styles.favoriteIcon} />
                     </TouchableOpacity>
                   </View>
 
@@ -966,15 +1202,15 @@ export default function Home() {
                         fontFamily: 'Poppins_400Regular'
                       }
                     ]}> 
-                      {item.reminder}
+                      {currentReminder.reminder}
                     </Text>
                     
                     <View style={[styles.sourceSection, { borderTopColor: theme.border }]}> 
                       <Text style={[styles.hadithText, { color: theme.textSecondary, fontFamily: 'Poppins_400Regular' }]}> 
-                        {item.hadith}
+                        {currentReminder.hadith}
                       </Text>
                       <Text style={[styles.sourceText, { color: theme.accent, fontFamily: 'Poppins_500Medium' }]}> 
-                        {item.source}
+                        {currentReminder.source}
                       </Text>
                     </View>
                   </View>
@@ -984,7 +1220,7 @@ export default function Home() {
                       style={[
                         styles.actionButton, 
                         { 
-                          backgroundColor: completedToday.includes(index) ? '#95d5a0' : theme.accent,
+                          backgroundColor: completedToday.includes(currentIndex) ? '#95d5a0' : theme.accent,
                           marginBottom: 0
                         }
                       ]} 
@@ -992,9 +1228,9 @@ export default function Home() {
                         let newCompleted;
                         let newStreak = streak;
                         
-                        if (completedToday.includes(index)) {
+                        if (completedToday.includes(currentIndex)) {
                           // Remove from completed
-                          newCompleted = completedToday.filter(id => id !== index);
+                          newCompleted = completedToday.filter(id => id !== currentIndex);
                           
                           // Decrease streak if this was the only completed deed today
                           if (completedToday.length === 1 && streak > 0) {
@@ -1003,7 +1239,7 @@ export default function Home() {
                           }
                         } else {
                           // Add to completed
-                          newCompleted = [...completedToday, index];
+                          newCompleted = [...completedToday, currentIndex];
                           
                           // Update streak if this is the first deed today
                           if (newCompleted.length === 1) {
@@ -1016,7 +1252,7 @@ export default function Home() {
                         setTotalCompleted(newCompleted.length);
                         
                         // Show completion overlay for new completions
-                        if (!completedToday.includes(index)) {
+                        if (!completedToday.includes(currentIndex)) {
                           createCompletionOverlay();
                         }
                         
@@ -1038,15 +1274,13 @@ export default function Home() {
                       }}
                     >
                       <Text style={[styles.buttonText, { fontFamily: 'Poppins_600SemiBold' }]}> 
-                        {completedToday.includes(index) ? "✓ Tap to Undo" : "I Did It!"}
+                        {completedToday.includes(currentIndex) ? "✓ Tap to Undo" : "I Did It!"}
                       </Text>
                     </TouchableOpacity>
                   </View>
                   </TouchableOpacity>
                 </Animated.View>
               </View>
-            ))}
-              </PagerView>
             </PanGestureHandler>
           </Animated.View>
           
@@ -1395,12 +1629,8 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
 
-  pagerView: {
+  cardContainer: {
     height: 500,
-    flex: 0,
-  },
-  
-  pagerPage: {
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 20,
