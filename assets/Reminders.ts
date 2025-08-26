@@ -13,11 +13,11 @@ export interface RemindersDataSet {
 
 // Default local data with versioning
 export const defaultRemindersData: RemindersDataSet = {
-  version: "1.0.0",
+  version: "1.0.1",
   lastUpdated: "2024-08-26T00:00:00Z",
   reminders: [
   { 
-    reminder: "Avoid backbiting today", 
+    reminder: "Avoid backbiting today 2", 
     source: "Sahih Bukhari",
     hadith: "The believer is not one who eats his fill while his neighbor goes hungry.",
     category: "Speech"
