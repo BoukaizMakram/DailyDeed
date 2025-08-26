@@ -5,7 +5,17 @@ export interface Reminder {
   category: string;
 }
 
-export const remindersData: Reminder[] = [
+export interface RemindersDataSet {
+  version: string;
+  lastUpdated: string;
+  reminders: Reminder[];
+}
+
+// Default local data with versioning
+export const defaultRemindersData: RemindersDataSet = {
+  version: "1.0.0",
+  lastUpdated: "2024-08-26T00:00:00Z",
+  reminders: [
   { 
     reminder: "Avoid backbiting today", 
     source: "Sahih Bukhari",
@@ -66,4 +76,8 @@ export const remindersData: Reminder[] = [
     hadith: "Feed the hungry, visit the sick, and free the captives.",
     category: "Community"
   }
-];
+  ]
+};
+
+// For backward compatibility - export just the reminders array
+export const remindersData: Reminder[] = defaultRemindersData.reminders;

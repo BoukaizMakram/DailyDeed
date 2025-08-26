@@ -360,59 +360,6 @@ export default function Profile() {
           </View>
         </Animated.View>
 
-        {/* Stats Section */}
-        <Animated.View 
-          style={[
-            styles.section,
-            {
-              opacity: fadeAnim,
-              transform: [{ translateY: slideAnim }]
-            }
-          ]}
-        >
-          <Text style={[styles.sectionTitle, { color: theme.textPrimary, fontFamily: 'Poppins_600SemiBold' }]}>
-            Your Progress
-          </Text>
-          
-          <View style={styles.statsGrid}>
-            <View style={[styles.statCard, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
-              <View style={[styles.statIcon, { backgroundColor: theme.accent + '20' }]}>
-                <Ionicons name="checkmark-circle" size={24} color={theme.accent} />
-              </View>
-              <Text style={[styles.statNumber, { color: theme.textPrimary, fontFamily: 'Poppins_700Bold' }]}>
-                {profileData.totalCompleted}
-              </Text>
-              <Text style={[styles.statLabel, { color: theme.textSecondary, fontFamily: 'Poppins_400Regular' }]}>
-                Total Deeds
-              </Text>
-            </View>
-
-            <View style={[styles.statCard, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
-              <View style={[styles.statIcon, { backgroundColor: '#ff9500' + '20' }]}>
-                <Ionicons name="flame" size={24} color="#ff9500" />
-              </View>
-              <Text style={[styles.statNumber, { color: theme.textPrimary, fontFamily: 'Poppins_700Bold' }]}>
-                {profileData.currentStreak}
-              </Text>
-              <Text style={[styles.statLabel, { color: theme.textSecondary, fontFamily: 'Poppins_400Regular' }]}>
-                Current Streak
-              </Text>
-            </View>
-
-            <View style={[styles.statCard, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
-              <View style={[styles.statIcon, { backgroundColor: '#007AFF' + '20' }]}>
-                <Ionicons name="trophy" size={24} color="#007AFF" />
-              </View>
-              <Text style={[styles.statNumber, { color: theme.textPrimary, fontFamily: 'Poppins_700Bold' }]}>
-                {profileData.bestStreak}
-              </Text>
-              <Text style={[styles.statLabel, { color: theme.textSecondary, fontFamily: 'Poppins_400Regular' }]}>
-                Best Streak
-              </Text>
-            </View>
-          </View>
-        </Animated.View>
-
         {/* Actions Section */}
         <Animated.View 
           style={[
@@ -722,5 +669,123 @@ const styles = StyleSheet.create({
   navText: {
     fontSize: 12,
     fontWeight: '500',
+  },
+  editButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    minWidth: 60,
+  },
+  editButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  profileCard: {
+    borderRadius: 16,
+    padding: 24,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  avatarLarge: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+    position: 'relative',
+  },
+  avatarImage: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+  },
+  cameraIconOverlay: {
+    position: 'absolute',
+    bottom: 4,
+    right: -2,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#ffffff',
+  },
+  profileInfo: {
+    alignItems: 'center',
+  },
+  profileName: {
+    fontSize: 24,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  profileEmail: {
+    fontSize: 16,
+    marginBottom: 4,
+  },
+  joinedDate: {
+    fontSize: 14,
+  },
+  editForm: {
+    width: '100%',
+  },
+  input: {
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginBottom: 12,
+    fontSize: 16,
+  },
+  editActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  button: {
+    flex: 1,
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  cancelButton: {
+    borderWidth: 1,
+  },
+  saveButton: {
+    // backgroundColor set dynamically
+  },
+  buttonText: {
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  actionsCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  actionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 20,
+  },
+  actionLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  actionIcon: {
+    fontSize: 20,
+    marginRight: 16,
+  },
+  actionTitle: {
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  separator: {
+    height: 1,
+    marginLeft: 56,
   },
 });

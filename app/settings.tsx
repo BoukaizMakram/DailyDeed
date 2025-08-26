@@ -219,12 +219,78 @@ export default function Settings() {
   }, [settings, saveSettings]);
 
   const clearData = async () => {
-    try {
-      await AsyncStorage.multiRemove(['dailyProgress', 'favorites', 'streak']);
-      alert('All data cleared successfully!');
-    } catch (error) {
-      console.log('Error clearing data:', error);
-    }
+    Alert.alert(
+      'Clear All Data',
+      'This will permanently delete all your progress, achievements, favorites, settings, and profile data. This action cannot be undone.\n\nAre you sure you want to continue?',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Clear All Data',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              // Get all storage keys used in the app
+              const keysToRemove = [
+                'dailyProgress',
+                'favorites', 
+                'streak',
+                'bestStreak',
+                'appSettings',
+                'darkMode',
+                'totalCompleted',
+                'progressHistory',
+                'achievements',
+                'calendarProgress',
+                'weeklyProgress',
+                'userProfile',
+                'lastActiveDate'
+              ];
+              
+              // Remove all storage data
+              await AsyncStorage.multiRemove(keysToRemove);
+              
+              // Clear any other remaining keys by getting all keys and removing them
+              const allKeys = await AsyncStorage.getAllKeys();
+              if (allKeys.length > 0) {
+                await AsyncStorage.multiRemove(allKeys);
+              }
+              
+              Alert.alert(
+                'Data Cleared',
+                'All app data has been successfully cleared. The app will restart to its initial state.',
+                [
+                  {
+                    text: 'OK',
+                    onPress: () => {
+                      // Reset local state to default values
+                      setSettings({
+                        notifications: true,
+                        notificationInterval: 0,
+                        darkMode: systemColorScheme === 'dark',
+                        showHadith: true,
+                        dailyGoal: 5,
+                      });
+                      setIsDarkMode(systemColorScheme === 'dark');
+                      setCurrentInterval(0);
+                    }
+                  }
+                ]
+              );
+            } catch (error) {
+              console.log('Error clearing data:', error);
+              Alert.alert(
+                'Error',
+                'There was an error clearing your data. Please try again or restart the app.',
+                [{ text: 'OK' }]
+              );
+            }
+          }
+        }
+      ]
+    );
   };
 
   const formatIntervalText = (minutes: number) => {
@@ -492,107 +558,6 @@ export default function Settings() {
           </View>
         </Animated.View>
 
-        {/* Data & Privacy */}
-        <Animated.View 
-          style={[
-            styles.section,
-            {
-              opacity: fadeAnim,
-              transform: [{ translateY: slideAnim }]
-            }
-          ]}
-        >
-          <Text style={[styles.sectionTitle, { color: theme.textPrimary, fontFamily: 'Poppins_600SemiBold' }]}>
-            Data & Privacy
-          </Text>
-          
-          <View style={[styles.settingsCard, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
-            <TouchableOpacity style={styles.settingItem}>
-              <View style={styles.settingLeft}>
-                                 <Ionicons name="analytics" size={24} color="#9ca1ab" style={styles.settingIcon} />
-                <Text style={[styles.settingTitle, { color: theme.textPrimary, fontFamily: 'Poppins_500Medium' }]}>
-                  View Progress
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={24} color="#9ca1ab" style={styles.chevronText} />
-            </TouchableOpacity>
-
-            <View style={[styles.separator, { backgroundColor: theme.border }]} />
-
-            <TouchableOpacity style={styles.settingItem}>
-              <View style={styles.settingLeft}>
-                                 <Ionicons name="download" size={24} color="#9ca1ab" style={styles.settingIcon} />
-                <Text style={[styles.settingTitle, { color: theme.textPrimary, fontFamily: 'Poppins_500Medium' }]}>
-                  Export Data
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={24} color="#9ca1ab" style={styles.chevronText} />
-            </TouchableOpacity>
-
-            <View style={[styles.separator, { backgroundColor: theme.border }]} />
-
-            <TouchableOpacity style={styles.settingItem} onPress={clearData}>
-              <View style={styles.settingLeft}>
-                                 <Ionicons name="trash" size={24} color="#9ca1ab" style={styles.settingIcon} />
-                <Text style={[styles.settingTitle, styles.dangerText, { fontFamily: 'Poppins_500Medium' }]}>
-                  Clear All Data
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={24} color="#9ca1ab" style={styles.chevronText} />
-            </TouchableOpacity>
-          </View>
-        </Animated.View>
-
-        {/* Support */}
-        <Animated.View 
-          style={[
-            styles.section,
-            {
-              opacity: fadeAnim,
-              transform: [{ translateY: slideAnim }]
-            }
-          ]}
-        >
-          <Text style={[styles.sectionTitle, { color: theme.textPrimary, fontFamily: 'Poppins_600SemiBold' }]}>
-            Support
-          </Text>
-          
-          <View style={[styles.settingsCard, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
-            <TouchableOpacity style={styles.settingItem}>
-              <View style={styles.settingLeft}>
-                                 <Ionicons name="help-circle" size={24} color="#9ca1ab" style={styles.settingIcon} />
-                <Text style={[styles.settingTitle, { color: theme.textPrimary, fontFamily: 'Poppins_500Medium' }]}>
-                  Help & FAQ
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={24} color="#9ca1ab" style={styles.chevronText} />
-            </TouchableOpacity>
-
-            <View style={[styles.separator, { backgroundColor: theme.border }]} />
-
-            <TouchableOpacity style={styles.settingItem}>
-              <View style={styles.settingLeft}>
-                                 <Ionicons name="mail" size={24} color="#9ca1ab" style={styles.settingIcon} />
-                <Text style={[styles.settingTitle, { color: theme.textPrimary, fontFamily: 'Poppins_500Medium' }]}>
-                  Contact Us
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={24} color="#9ca1ab" style={styles.chevronText} />
-            </TouchableOpacity>
-
-            <View style={[styles.separator, { backgroundColor: theme.border }]} />
-
-            <TouchableOpacity style={styles.settingItem}>
-              <View style={styles.settingLeft}>
-                                 <Ionicons name="star" size={24} color="#9ca1ab" style={styles.settingIcon} />
-                <Text style={[styles.settingTitle, { color: theme.textPrimary, fontFamily: 'Poppins_500Medium' }]}>
-                  Rate App
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={24} color="#9ca1ab" style={styles.chevronText} />
-            </TouchableOpacity>
-          </View>
-        </Animated.View>
 
         {/* About */}
         <Animated.View 

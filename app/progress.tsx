@@ -1,9 +1,10 @@
 import { Poppins_400Regular, Poppins_500Medium, Poppins_600SemiBold, Poppins_700Bold, useFonts } from '@expo-google-fonts/poppins';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Link } from 'expo-router';
+import { Link, useFocusEffect } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, Dimensions, ScrollView, StyleSheet, Text, TouchableOpacity, useColorScheme, View } from 'react-native';
+import { Achievement, achievementsList } from '../assets/Achievements';
 
 const { width } = Dimensions.get('window');
 
@@ -48,6 +49,19 @@ export default function Progress() {
   const [todayCompleted, setTodayCompleted] = useState(0);
   const [weeklyData, setWeeklyData] = useState<WeeklyData[]>([]);
   const [totalDays, setTotalDays] = useState(0);
+  const [achievements, setAchievements] = useState<Achievement[]>(achievementsList);
+  const [goalDaysCount, setGoalDaysCount] = useState(0);
+  const [calendarData, setCalendarData] = useState<Record<string, {
+    completed: number[];
+    completedCount: number;
+    goalMet: boolean;
+    streak: number;
+  }>>({});
+  const [currentWeekData, setCurrentWeekData] = useState<{
+    days: Record<string, number>;
+    totalCompleted: number;
+    daysActive: number;
+  } | null>(null);
 
   // Load fonts
   const [fontsLoaded] = useFonts({
@@ -66,6 +80,13 @@ export default function Progress() {
     loadThemePreference();
     startAnimations();
   }, []);
+
+  // Reload data when screen is focused
+  useFocusEffect(
+    useCallback(() => {
+      loadProgressData();
+    }, [todayCompleted, currentStreak, bestStreak, dailyGoal])
+  );
 
   const startAnimations = () => {
     Animated.parallel([
@@ -89,14 +110,20 @@ export default function Progress() {
       const savedStreak = await AsyncStorage.getItem('streak');
       const savedBestStreak = await AsyncStorage.getItem('bestStreak');
       const savedSettings = await AsyncStorage.getItem('appSettings');
+      const savedTotalCompleted = await AsyncStorage.getItem('totalCompleted');
+      const savedHistoryData = await AsyncStorage.getItem('progressHistory');
 
       // Load today's progress
       if (savedProgress) {
         const progress: DailyProgress = JSON.parse(savedProgress);
         if (progress.date === today) {
           setTodayCompleted(progress.completedDeeds.length);
-          setTotalCompleted(progress.completedDeeds.length);
         }
+      }
+
+      // Load total completed from dedicated storage
+      if (savedTotalCompleted) {
+        setTotalCompleted(parseInt(savedTotalCompleted));
       }
 
       // Load streak data
@@ -113,29 +140,53 @@ export default function Progress() {
         setDailyGoal(settings.dailyGoal);
       }
 
-      // Generate weekly data (last 7 days)
-      generateWeeklyData();
+      // Generate weekly data using historical data
+      await generateWeeklyData(savedHistoryData);
       
-      // Calculate total active days
-      calculateTotalDays();
+      // Calculate total active days from historical data
+      await calculateTotalDays(savedHistoryData);
+      
+      // Calculate goal achievement days
+      await calculateGoalDays(savedHistoryData);
+      
+      // Load calendar and weekly data
+      await loadCalendarData();
+      
+      // Load and update achievements
+      await loadAchievements();
     } catch (error) {
       console.log('Error loading progress data:', error);
     }
   };
 
-  const generateWeeklyData = () => {
+  const generateWeeklyData = async (savedHistoryData: string | null) => {
     const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     const today = new Date();
     const weekData: WeeklyData[] = [];
+    
+    // Use calendar data primarily, fallback to history data
+    const historyData: Record<string, number> = savedHistoryData ? JSON.parse(savedHistoryData) : {};
 
     for (let i = 6; i >= 0; i--) {
       const date = new Date(today);
       date.setDate(today.getDate() - i);
       const dayName = days[date.getDay()];
+      const dateKey = date.toDateString();
       
-      // For demo purposes, generate some random data
-      // In a real app, you'd load this from storage
-      const completed = i === 0 ? todayCompleted : Math.floor(Math.random() * 8);
+      // Get actual completed count for this date, or 0 if no data
+      let completed = 0;
+      if (i === 0) {
+        // Today's data
+        completed = todayCompleted;
+      } else {
+        // Try calendar data first, then historical data
+        const calendarDayData = calendarData[dateKey];
+        if (calendarDayData) {
+          completed = calendarDayData.completedCount;
+        } else {
+          completed = historyData[dateKey] || 0;
+        }
+      }
       
       weekData.push({
         day: dayName,
@@ -147,10 +198,132 @@ export default function Progress() {
     setWeeklyData(weekData);
   };
 
-  const calculateTotalDays = () => {
-    // For demo purposes, let's say user has been active for some days
-    // In a real app, you'd calculate this based on actual data
-    setTotalDays(Math.floor(Math.random() * 30) + 15);
+  const calculateTotalDays = async (savedHistoryData: string | null) => {
+    try {
+      // Parse historical data
+      const historyData: Record<string, number> = savedHistoryData ? JSON.parse(savedHistoryData) : {};
+      
+      // Count days where user completed at least one deed
+      let activeDays = 0;
+      const today = new Date().toDateString();
+      
+      // Count from historical data
+      Object.keys(historyData).forEach(date => {
+        if (historyData[date] > 0) {
+          activeDays++;
+        }
+      });
+      
+      // Add today if user has completed deeds
+      if (todayCompleted > 0 && !historyData[today]) {
+        activeDays++;
+      }
+      
+      setTotalDays(activeDays);
+    } catch (error) {
+      console.log('Error calculating total days:', error);
+      setTotalDays(0);
+    }
+  };
+
+  const calculateGoalDays = async (savedHistoryData: string | null) => {
+    try {
+      const historyData: Record<string, number> = savedHistoryData ? JSON.parse(savedHistoryData) : {};
+      const today = new Date().toDateString();
+      
+      let goalDays = 0;
+      
+      // Count from historical data
+      Object.keys(historyData).forEach(date => {
+        if (historyData[date] >= dailyGoal) {
+          goalDays++;
+        }
+      });
+      
+      // Add today if goal is reached
+      if (todayCompleted >= dailyGoal && (!historyData[today] || historyData[today] < dailyGoal)) {
+        goalDays++;
+      }
+      
+      setGoalDaysCount(goalDays);
+    } catch (error) {
+      console.log('Error calculating goal days:', error);
+      setGoalDaysCount(0);
+    }
+  };
+
+  const loadAchievements = async () => {
+    try {
+      const savedAchievements = await AsyncStorage.getItem('achievements');
+      let userAchievements: Achievement[] = savedAchievements ? JSON.parse(savedAchievements) : achievementsList;
+      
+      // Update achievements based on current progress
+      const updatedAchievements = await Promise.all(userAchievements.map(async achievement => {
+        let shouldUnlock = false;
+        
+        switch (achievement.condition.type) {
+          case 'total_completed':
+            shouldUnlock = totalCompleted >= achievement.condition.value;
+            break;
+          case 'streak':
+            shouldUnlock = currentStreak >= achievement.condition.value || bestStreak >= achievement.condition.value;
+            break;
+          case 'daily_goal':
+            shouldUnlock = goalDaysCount >= achievement.condition.value;
+            break;
+          case 'app_shared':
+            // Check if app has been shared
+            const appShared = await AsyncStorage.getItem('appShared');
+            shouldUnlock = appShared === 'true';
+            break;
+          case 'deed_shared':
+            // Check if deed has been shared
+            const deedShared = await AsyncStorage.getItem('deedShared');
+            shouldUnlock = deedShared === 'true';
+            break;
+          case 'app_reviewed':
+            // Check if app has been reviewed
+            const appReviewed = await AsyncStorage.getItem('appReviewed');
+            shouldUnlock = appReviewed === 'true';
+            break;
+        }
+        
+        return { ...achievement, unlocked: shouldUnlock };
+      }));
+      
+      setAchievements(updatedAchievements);
+      
+      // Save updated achievements
+      await AsyncStorage.setItem('achievements', JSON.stringify(updatedAchievements));
+    } catch (error) {
+      console.log('Error loading achievements:', error);
+    }
+  };
+
+  const loadCalendarData = async () => {
+    try {
+      // Load calendar progress
+      const savedCalendar = await AsyncStorage.getItem('calendarProgress');
+      if (savedCalendar) {
+        setCalendarData(JSON.parse(savedCalendar));
+      }
+
+      // Load current week data
+      const today = new Date();
+      const weekStart = new Date(today);
+      weekStart.setDate(today.getDate() - today.getDay());
+      const weekKey = weekStart.toDateString();
+      
+      const savedWeekly = await AsyncStorage.getItem('weeklyProgress');
+      if (savedWeekly) {
+        const weeklyProgress = JSON.parse(savedWeekly);
+        if (weeklyProgress[weekKey]) {
+          setCurrentWeekData(weeklyProgress[weekKey]);
+        }
+      }
+    } catch (error) {
+      console.log('Error loading calendar data:', error);
+    }
   };
 
   const loadThemePreference = async () => {
@@ -189,6 +362,71 @@ export default function Progress() {
   const progressPercentage = Math.min((todayCompleted / dailyGoal) * 100, 100);
   const completionRate = totalDays > 0 ? Math.round((currentStreak / totalDays) * 100) : 0;
 
+  const renderCalendarGrid = () => {
+    const today = new Date();
+    const currentMonth = today.getMonth();
+    const currentYear = today.getFullYear();
+    const firstDay = new Date(currentYear, currentMonth, 1);
+    const lastDay = new Date(currentYear, currentMonth + 1, 0);
+    const daysInMonth = lastDay.getDate();
+    const startingDayOfWeek = firstDay.getDay();
+
+    const days = [];
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+    // Day headers
+    const dayHeaders = dayNames.map(day => (
+      <Text key={day} style={[styles.calendarDayHeader, { color: theme.textSecondary, fontFamily: 'Poppins_500Medium' }]}>
+        {day}
+      </Text>
+    ));
+
+    // Empty cells for days before month starts
+    for (let i = 0; i < startingDayOfWeek; i++) {
+      days.push(<View key={`empty-${i}`} style={styles.calendarDay} />);
+    }
+
+    // Days of the month
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dateString = new Date(currentYear, currentMonth, day).toDateString();
+      const dayData = calendarData[dateString];
+      const isToday = day === today.getDate() && currentMonth === today.getMonth() && currentYear === today.getFullYear();
+      
+      let dayStyle = styles.calendarDay;
+      let textStyle = [styles.calendarDayText, { color: theme.textPrimary, fontFamily: 'Poppins_500Medium' }];
+      let backgroundStyle = {};
+      
+      if (isToday) {
+        backgroundStyle = { backgroundColor: theme.accent };
+        textStyle = [styles.calendarDayText, { color: '#ffffff', fontFamily: 'Poppins_500Medium' }];
+      } else if (dayData?.goalMet) {
+        backgroundStyle = { backgroundColor: theme.accent + '40' };
+      } else if (dayData?.completedCount > 0) {
+        backgroundStyle = { backgroundColor: theme.accent + '20' };
+      }
+
+      days.push(
+        <View key={day} style={[dayStyle, backgroundStyle]}>
+          <Text style={textStyle}>{day}</Text>
+          {dayData?.completedCount > 0 && (
+            <View style={[styles.calendarDayDot, { backgroundColor: dayData.goalMet ? theme.accent : '#ffa500' }]} />
+          )}
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.calendarContainer}>
+        <View style={styles.calendarHeader}>
+          {dayHeaders}
+        </View>
+        <View style={styles.calendarGrid}>
+          {days}
+        </View>
+      </View>
+    );
+  };
+
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
       {/* Header */}
@@ -218,7 +456,7 @@ export default function Progress() {
         contentContainerStyle={styles.scrollContent} 
         showsVerticalScrollIndicator={false}
       >
-        {/* Today's Progress */}
+        {/* Total Deeds Performed */}
         <Animated.View 
           style={[
             styles.section,
@@ -228,187 +466,16 @@ export default function Progress() {
             }
           ]}
         >
-          <Text style={[styles.sectionTitle, { color: theme.textPrimary, fontFamily: 'Poppins_600SemiBold' }]}>
-            Today's Progress
-          </Text>
-          
-          <View style={[styles.progressCard, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
-            <View style={styles.progressHeader}>
-              <Text style={[styles.progressTitle, { color: theme.textPrimary, fontFamily: 'Poppins_600SemiBold' }]}>
-                Daily Goal
-              </Text>
-              <Text style={[styles.progressCount, { color: theme.accent, fontFamily: 'Poppins_700Bold' }]}>
-                {todayCompleted}/{dailyGoal}
-              </Text>
+          <View style={[styles.totalDeedsCard, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
+            <View style={[styles.totalDeedsIcon, { backgroundColor: theme.accent + '20' }]}>
+              <Ionicons name="checkmark-circle" size={48} color={theme.accent} />
             </View>
-            
-            <View style={[styles.progressBarContainer, { backgroundColor: theme.border }]}>
-              <View 
-                style={[
-                  styles.progressBar, 
-                  { 
-                    backgroundColor: theme.accent,
-                    width: `${progressPercentage}%`
-                  }
-                ]} 
-              />
-            </View>
-            
-            <Text style={[styles.progressPercentage, { color: theme.textSecondary, fontFamily: 'Poppins_500Medium' }]}>
-              {Math.round(progressPercentage)}% Complete
+            <Text style={[styles.totalDeedsNumber, { color: theme.textPrimary, fontFamily: 'Poppins_700Bold' }]}>
+              {todayCompleted}
             </Text>
-          </View>
-        </Animated.View>
-
-        {/* Stats Overview */}
-        <Animated.View 
-          style={[
-            styles.section,
-            {
-              opacity: fadeAnim,
-              transform: [{ translateY: slideAnim }]
-            }
-          ]}
-        >
-          <Text style={[styles.sectionTitle, { color: theme.textPrimary, fontFamily: 'Poppins_600SemiBold' }]}>
-            Overview
-          </Text>
-          
-          <View style={styles.statsGrid}>
-            <View style={[styles.statCard, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
-              <View style={[styles.statIcon, { backgroundColor: theme.accent + '20' }]}>
-                <Ionicons name="flame" size={24} color={theme.accent} />
-              </View>
-              <Text style={[styles.statNumber, { color: theme.textPrimary, fontFamily: 'Poppins_700Bold' }]}>
-                {currentStreak}
-              </Text>
-              <Text style={[styles.statLabel, { color: theme.textSecondary, fontFamily: 'Poppins_400Regular' }]}>
-                Current Streak
-              </Text>
-            </View>
-
-            <View style={[styles.statCard, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
-              <View style={[styles.statIcon, { backgroundColor: '#ff9500' + '20' }]}>
-                <Ionicons name="trophy" size={24} color="#ff9500" />
-              </View>
-              <Text style={[styles.statNumber, { color: theme.textPrimary, fontFamily: 'Poppins_700Bold' }]}>
-                {bestStreak}
-              </Text>
-              <Text style={[styles.statLabel, { color: theme.textSecondary, fontFamily: 'Poppins_400Regular' }]}>
-                Best Streak
-              </Text>
-            </View>
-
-            <View style={[styles.statCard, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
-              <View style={[styles.statIcon, { backgroundColor: '#007AFF' + '20' }]}>
-                <Ionicons name="calendar" size={24} color="#007AFF" />
-              </View>
-              <Text style={[styles.statNumber, { color: theme.textPrimary, fontFamily: 'Poppins_700Bold' }]}>
-                {totalDays}
-              </Text>
-              <Text style={[styles.statLabel, { color: theme.textSecondary, fontFamily: 'Poppins_400Regular' }]}>
-                Active Days
-              </Text>
-            </View>
-          </View>
-        </Animated.View>
-
-        {/* Weekly Chart */}
-        <Animated.View 
-          style={[
-            styles.section,
-            {
-              opacity: fadeAnim,
-              transform: [{ translateY: slideAnim }]
-            }
-          ]}
-        >
-          <Text style={[styles.sectionTitle, { color: theme.textPrimary, fontFamily: 'Poppins_600SemiBold' }]}>
-            This Week
-          </Text>
-          
-          <View style={[styles.chartCard, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
-            <View style={styles.chartContainer}>
-              {weeklyData.map((data, index) => {
-                const height = Math.max((data.completed / Math.max(data.goal, 1)) * 100, 5);
-                const isToday = index === weeklyData.length - 1;
-                
-                return (
-                  <View key={data.day} style={styles.chartColumn}>
-                    <View style={styles.chartBarContainer}>
-                      <View 
-                        style={[
-                          styles.chartBar,
-                          {
-                            height: `${height}%`,
-                            backgroundColor: isToday ? theme.accent : theme.border,
-                          }
-                        ]}
-                      />
-                    </View>
-                    <Text style={[styles.chartLabel, { color: theme.textSecondary, fontFamily: 'Poppins_400Regular' }]}>
-                      {data.day}
-                    </Text>
-                    <Text style={[styles.chartValue, { color: theme.textPrimary, fontFamily: 'Poppins_500Medium' }]}>
-                      {data.completed}
-                    </Text>
-                  </View>
-                );
-              })}
-            </View>
-          </View>
-        </Animated.View>
-
-        {/* Achievements */}
-        <Animated.View 
-          style={[
-            styles.section,
-            {
-              opacity: fadeAnim,
-              transform: [{ translateY: slideAnim }]
-            }
-          ]}
-        >
-          <Text style={[styles.sectionTitle, { color: theme.textPrimary, fontFamily: 'Poppins_600SemiBold' }]}>
-            Achievements
-          </Text>
-          
-          <View style={[styles.achievementCard, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
-            <View style={styles.achievementItem}>
-              <View style={[styles.achievementIcon, { backgroundColor: currentStreak >= 7 ? theme.accent + '20' : theme.border }]}>
-                <Ionicons name="medal" size={24} color={currentStreak >= 7 ? theme.accent : theme.textSecondary} />
-              </View>
-              <View style={styles.achievementText}>
-                <Text style={[styles.achievementTitle, { color: theme.textPrimary, fontFamily: 'Poppins_500Medium' }]}>
-                  Week Warrior
-                </Text>
-                <Text style={[styles.achievementDescription, { color: theme.textSecondary, fontFamily: 'Poppins_400Regular' }]}>
-                  Complete 7 days in a row
-                </Text>
-              </View>
-              {currentStreak >= 7 && (
-                <Ionicons name="checkmark-circle" size={24} color={theme.accent} />
-              )}
-            </View>
-
-            <View style={[styles.separator, { backgroundColor: theme.border }]} />
-
-            <View style={styles.achievementItem}>
-              <View style={[styles.achievementIcon, { backgroundColor: bestStreak >= 30 ? theme.accent + '20' : theme.border }]}>
-                <Ionicons name="star" size={24} color={bestStreak >= 30 ? theme.accent : theme.textSecondary} />
-              </View>
-              <View style={styles.achievementText}>
-                <Text style={[styles.achievementTitle, { color: theme.textPrimary, fontFamily: 'Poppins_500Medium' }]}>
-                  Monthly Master
-                </Text>
-                <Text style={[styles.achievementDescription, { color: theme.textSecondary, fontFamily: 'Poppins_400Regular' }]}>
-                  Complete 30 days in a row
-                </Text>
-              </View>
-              {bestStreak >= 30 && (
-                <Ionicons name="checkmark-circle" size={24} color={theme.accent} />
-              )}
-            </View>
+            <Text style={[styles.totalDeedsLabel, { color: theme.textSecondary, fontFamily: 'Poppins_500Medium' }]}>
+              Daily Deeds Done Today
+            </Text>
           </View>
         </Animated.View>
 
@@ -654,5 +721,111 @@ const styles = StyleSheet.create({
   navText: {
     fontSize: 12,
     fontWeight: '500',
+  },
+  // Calendar styles
+  calendarCard: {
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    marginBottom: 16,
+  },
+  calendarContainer: {
+    width: '100%',
+  },
+  calendarHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginBottom: 12,
+  },
+  calendarDayHeader: {
+    fontSize: 12,
+    textAlign: 'center',
+    width: 40,
+  },
+  calendarGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-around',
+  },
+  calendarDay: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginVertical: 2,
+    borderRadius: 20,
+    position: 'relative',
+  },
+  calendarDayText: {
+    fontSize: 14,
+    textAlign: 'center',
+  },
+  calendarDayDot: {
+    position: 'absolute',
+    bottom: 4,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  weekSummaryCard: {
+    borderRadius: 16,
+    padding: 20,
+    borderWidth: 1,
+  },
+  weekSummaryTitle: {
+    fontSize: 16,
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  weekSummaryStats: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+  },
+  weekStat: {
+    alignItems: 'center',
+  },
+  weekStatNumber: {
+    fontSize: 20,
+    marginBottom: 4,
+  },
+  weekStatLabel: {
+    fontSize: 12,
+    textAlign: 'center',
+  },
+  achievementCategoryBadgeSmall: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 12,
+    marginBottom: 4,
+    alignSelf: 'flex-start',
+  },
+  achievementCategoryTextSmall: {
+    fontSize: 10,
+    fontWeight: '500',
+  },
+  totalDeedsCard: {
+    borderRadius: 20,
+    padding: 40,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 20,
+  },
+  totalDeedsIcon: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  totalDeedsNumber: {
+    fontSize: 48,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  totalDeedsLabel: {
+    fontSize: 18,
+    textAlign: 'center',
   },
 });

@@ -7,6 +7,7 @@ import {
   Dimensions,
   Easing,
   Image,
+  Modal,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -21,7 +22,9 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Link, useFocusEffect } from 'expo-router';
 import { PanGestureHandler, State } from 'react-native-gesture-handler';
-import { Reminder, remindersData } from '../assets/Reminders';
+import { Reminder } from '../assets/Reminders';
+import { ReminderManager } from '../services/ReminderManager';
+import { Achievement, achievementsList } from '../assets/Achievements';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 
@@ -61,6 +64,8 @@ try {
         shouldShowAlert: true,
         shouldPlaySound: true,
         shouldSetBadge: false,
+        shouldShowBanner: true,
+        shouldShowList: true,
       }),
     });
   }
@@ -88,6 +93,9 @@ export default function Home() {
   const [notificationPermission, setNotificationPermission] = useState<string>('undetermined');
   const [isExpoGo, setIsExpoGo] = useState<boolean>(false);
   const [profileImage, setProfileImage] = useState<string | null>(null);
+  const [isAnyAnimationPlaying, setIsAnyAnimationPlaying] = useState(false);
+  const [remindersData, setRemindersData] = useState<Reminder[]>([]);
+  const [isLoadingReminders, setIsLoadingReminders] = useState(true);
   
   // Load fonts
   const [fontsLoaded] = useFonts({
@@ -131,6 +139,44 @@ export default function Home() {
     messageOpacity: Animated.Value;
     animation?: any;
   } | null>(null);
+
+  // Achievement overlay state
+  const [achievementOverlay, setAchievementOverlay] = useState<{
+    visible: boolean;
+    achievement: {
+      title: string;
+      message: string;
+      icon: string;
+      color: string;
+      category: string;
+    };
+    scale: Animated.Value;
+    messageOpacity: Animated.Value;
+    iconScale?: Animated.Value;
+    titleScale?: Animated.Value;
+    animation?: any;
+  } | null>(null);
+
+  // Right-side popup notification state
+  const [rightPopup, setRightPopup] = useState<{
+    visible: boolean;
+    message: string;
+    translateX: Animated.Value;
+    opacity: Animated.Value;
+    animation?: any;
+  } | null>(null);
+
+  // Custom alert modal state
+  const [customAlert, setCustomAlert] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    buttons: Array<{
+      text: string;
+      onPress?: () => void;
+      style?: string;
+    }>;
+  } | null>(null);
   
   // Pan gesture state for card following (horizontal only)
   const panX = useRef(new Animated.Value(0)).current;
@@ -152,8 +198,14 @@ export default function Home() {
     // Handle app state changes
     const subscription = AppState.addEventListener('change', handleAppStateChange);
     
+    // Handle notification responses
+    const notificationSubscription = Notifications.addNotificationResponseReceivedListener(
+      handleNotificationResponse
+    );
+    
     return () => {
       subscription?.remove();
+      notificationSubscription?.remove();
       // Clean up interval when component unmounts
       if (reminderInterval.current) {
         clearInterval(reminderInterval.current);
@@ -205,6 +257,35 @@ export default function Home() {
     appState.current = nextAppState;
   };
 
+  const handleNotificationResponse = async (response: Notifications.NotificationResponse) => {
+    const notificationData = response.notification.request.content.data;
+    
+    if (notificationData?.type === 'good_deed_inspiration') {
+      console.log('User tapped on good deed notification:', notificationData.goodDeed);
+      
+      // Find the good deed in our data
+      const goodDeedIndex = remindersData.findIndex(
+        reminder => reminder.reminder === notificationData.goodDeed
+      );
+      
+      if (goodDeedIndex !== -1) {
+        // Navigate to that specific good deed
+        setCurrentIndex(goodDeedIndex);
+        setCurrentReminder(remindersData[goodDeedIndex]);
+        
+        // Show a welcome back message
+        setTimeout(async () => {
+          await showRightPopupNotification("Welcome back! Ready to do this good deed?");
+        }, 1000);
+      } else {
+        // Show a general inspiration message
+        setTimeout(async () => {
+          await showRightPopupNotification("Great to see you back! Time for some kindness.");
+        }, 1000);
+      }
+    }
+  };
+
   // Alternative reminder system for Expo Go
   const startReminderSystem = () => {
     if (reminderInterval.current) {
@@ -235,18 +316,26 @@ export default function Home() {
 
   const showReminderAlert = () => {
     const randomIndex = Math.floor(Math.random() * remindersData.length);
-    const randomReminder = remindersData[randomIndex];
+    const randomGoodDeed = remindersData[randomIndex];
+    
+    const alertTitles = [
+      "💫 Good Deed Inspiration",
+      "🌟 Kindness Reminder", 
+      "✨ Spread Some Joy",
+      "💖 Make Someone's Day"
+    ];
+    const randomTitle = alertTitles[Math.floor(Math.random() * alertTitles.length)];
     
     Alert.alert(
-      "Daily Deed Reminder 🌟",
-      `${randomReminder.reminder}\n\n— ${randomReminder.source}`,
+      randomTitle,
+      `${randomGoodDeed.reminder}\n\n— ${randomGoodDeed.source}`,
       [
         {
-          text: "Dismiss",
+          text: "Maybe Later",
           style: "cancel"
         },
         {
-          text: "Mark as Done",
+          text: "I'll Do It!",
           style: "default",
           onPress: () => {
             if (!completedToday.includes(randomIndex)) {
@@ -257,6 +346,9 @@ export default function Home() {
                 setStreak(streak + 1);
               }
               saveProgress();
+              // Navigate to the good deed they committed to
+              setCurrentIndex(randomIndex);
+              setCurrentReminder(randomGoodDeed);
             }
           }
         }
@@ -384,7 +476,6 @@ export default function Home() {
               allowCriticalAlerts: false,
               provideAppNotificationSettings: false,
               allowProvisional: false,
-              allowAnnouncements: false,
             },
           });
           finalStatus = status;
@@ -400,7 +491,10 @@ export default function Home() {
             [
               {
                 text: 'Settings',
-                onPress: () => Notifications.openNotificationSettingsAsync?.()
+                onPress: () => {
+                  // Navigate to system settings since openNotificationSettingsAsync is not available
+                  console.log('Opening notification settings...');
+                }
               },
               {
                 text: 'Cancel',
@@ -429,6 +523,20 @@ export default function Home() {
     }
   };
 
+  // Custom alert function to show properly contained modal
+  const showCustomAlert = (title: string, message: string, buttons: Array<{text: string, onPress?: () => void, style?: string}>) => {
+    setCustomAlert({
+      visible: true,
+      title,
+      message,
+      buttons
+    });
+  };
+
+  const hideCustomAlert = () => {
+    setCustomAlert(null);
+  };
+
   const loadSettings = async () => {
     try {
       const savedSettings = await AsyncStorage.getItem('appSettings');
@@ -441,7 +549,7 @@ export default function Home() {
     }
   };
 
-  const scheduleRandomReminderNotifications = async () => {
+  const scheduleRandomGoodDeedNotifications = async () => {
     try {
       // Check environment first
       const isRunningInExpoGo = Constants.appOwnership === 'expo';
@@ -470,35 +578,50 @@ export default function Home() {
       }
       
       const intervalSeconds = settings.notificationInterval * 60;
-      const numberOfNotifications = intervalSeconds > 1800 ? 10 : 20;
+      const numberOfNotifications = intervalSeconds > 1800 ? 15 : 30; // More notifications for good deeds
       
       for (let i = 0; i < numberOfNotifications; i++) {
         const randomIndex = Math.floor(Math.random() * remindersData.length);
-        const randomReminder = remindersData[randomIndex];
+        const randomGoodDeed = remindersData[randomIndex];
+        
+        // Create variation in notification titles
+        const notificationTitles = [
+          "💫 Good Deed Inspiration",
+          "🌟 Daily Kindness Reminder", 
+          "✨ Spread Some Joy",
+          "💖 Make Someone's Day",
+          "🌈 Random Act of Kindness"
+        ];
+        const randomTitle = notificationTitles[Math.floor(Math.random() * notificationTitles.length)];
         
         await Notifications.scheduleNotificationAsync({
           content: {
-            title: "Daily Deed Reminder 🌟",
-            body: randomReminder.reminder,
+            title: randomTitle,
+            body: randomGoodDeed.reminder,
             data: { 
-              reminder: randomReminder,
-              source: randomReminder.source,
-              category: randomReminder.category,
-              type: 'random_reminder'
+              goodDeed: randomGoodDeed.reminder,
+              source: randomGoodDeed.source,
+              category: randomGoodDeed.category,
+              type: 'good_deed_inspiration',
+              originalReminder: randomGoodDeed
             },
             sound: true,
+            badge: 1,
           },
           trigger: {
-            seconds: (i + 1) * intervalSeconds,
+            seconds: (i + 1) * intervalSeconds + Math.floor(Math.random() * 300), // Add randomness up to 5 minutes
           } as Notifications.TimeIntervalTriggerInput,
         });
       }
       
-      console.log(`Scheduled ${numberOfNotifications} random reminder notifications with ${settings.notificationInterval} minute intervals`);
+      console.log(`Scheduled ${numberOfNotifications} good deed inspiration notifications with ${settings.notificationInterval} minute intervals`);
     } catch (error) {
-      console.log('Error scheduling random reminder notifications:', error);
+      console.log('Error scheduling good deed notifications:', error);
     }
   };
+
+  // Keep the old function name for backward compatibility but point to new function
+  const scheduleRandomReminderNotifications = scheduleRandomGoodDeedNotifications;
 
   const cancelAllRandomReminderNotifications = async () => {
     try {
@@ -513,7 +636,8 @@ export default function Home() {
         const scheduledNotifications = await Notifications.getAllScheduledNotificationsAsync();
         
         for (const notification of scheduledNotifications) {
-          if (notification.content.data?.type === 'random_reminder') {
+          if (notification.content.data?.type === 'random_reminder' || 
+              notification.content.data?.type === 'good_deed_inspiration') {
             await Notifications.cancelScheduledNotificationAsync(notification.identifier);
           }
         }
@@ -527,19 +651,129 @@ export default function Home() {
     }
   };
 
+  const handleDailyReset = async (lastDate: string, currentDate: string) => {
+    try {
+      // Save yesterday's progress to calendar/weekly tracking
+      const savedProgress = await AsyncStorage.getItem('dailyProgress');
+      if (savedProgress) {
+        const progress: DailyProgress = JSON.parse(savedProgress);
+        
+        // Save to calendar system
+        const savedCalendar = await AsyncStorage.getItem('calendarProgress');
+        const calendarData: Record<string, {
+          completed: number[];
+          completedCount: number;
+          goalMet: boolean;
+          streak: number;
+        }> = savedCalendar ? JSON.parse(savedCalendar) : {};
+        
+        // Store yesterday's data
+        calendarData[lastDate] = {
+          completed: progress.completedDeeds,
+          completedCount: progress.completedDeeds.length,
+          goalMet: progress.completedDeeds.length >= settings.dailyGoal,
+          streak: progress.currentStreak
+        };
+        
+        await AsyncStorage.setItem('calendarProgress', JSON.stringify(calendarData));
+        
+        // Update weekly tracking
+        await updateWeeklyTracking(lastDate, progress.completedDeeds.length);
+        
+        // Handle streak logic
+        const daysDifference = Math.floor((new Date(currentDate).getTime() - new Date(lastDate).getTime()) / (1000 * 60 * 60 * 24));
+        if (daysDifference > 1) {
+          // Missed days, reset streak
+          setStreak(0);
+          await AsyncStorage.setItem('streak', '0');
+        } else if (progress.completedDeeds.length === 0) {
+          // Yesterday had no completions, reset streak
+          setStreak(0);
+          await AsyncStorage.setItem('streak', '0');
+        }
+      }
+      
+      console.log(`Daily reset completed for ${lastDate} -> ${currentDate}`);
+    } catch (error) {
+      console.log('Error handling daily reset:', error);
+    }
+  };
+
+  const updateWeeklyTracking = async (date: string, completedCount: number) => {
+    try {
+      const dateObj = new Date(date);
+      const weekStart = new Date(dateObj);
+      weekStart.setDate(dateObj.getDate() - dateObj.getDay()); // Start of week (Sunday)
+      const weekKey = weekStart.toDateString();
+      
+      const savedWeekly = await AsyncStorage.getItem('weeklyProgress');
+      const weeklyData: Record<string, {
+        days: Record<string, number>;
+        totalCompleted: number;
+        daysActive: number;
+      }> = savedWeekly ? JSON.parse(savedWeekly) : {};
+      
+      if (!weeklyData[weekKey]) {
+        weeklyData[weekKey] = {
+          days: {},
+          totalCompleted: 0,
+          daysActive: 0
+        };
+      }
+      
+      // Check if this day already exists to avoid double counting
+      const previousCount = weeklyData[weekKey].days[date] || 0;
+      const wasActive = previousCount > 0;
+      
+      // Update the day's count
+      weeklyData[weekKey].days[date] = completedCount;
+      
+      // Update total completed (subtract old count, add new count)
+      weeklyData[weekKey].totalCompleted = weeklyData[weekKey].totalCompleted - previousCount + completedCount;
+      
+      // Update active days count
+      const isActive = completedCount > 0;
+      if (wasActive && !isActive) {
+        // Day became inactive
+        weeklyData[weekKey].daysActive = Math.max(0, weeklyData[weekKey].daysActive - 1);
+      } else if (!wasActive && isActive) {
+        // Day became active
+        weeklyData[weekKey].daysActive += 1;
+      }
+      
+      await AsyncStorage.setItem('weeklyProgress', JSON.stringify(weeklyData));
+    } catch (error) {
+      console.log('Error updating weekly tracking:', error);
+    }
+  };
+
   const loadProgress = async () => {
     try {
       const today = new Date().toDateString();
       const savedProgress = await AsyncStorage.getItem('dailyProgress');
       const savedFavorites = await AsyncStorage.getItem('favorites');
       const savedStreak = await AsyncStorage.getItem('streak');
+      const savedLastActiveDate = await AsyncStorage.getItem('lastActiveDate');
+      
+      // Check if it's a new day and handle reset
+      if (savedLastActiveDate && savedLastActiveDate !== today) {
+        await handleDailyReset(savedLastActiveDate, today);
+      }
       
       if (savedProgress) {
         const progress: DailyProgress = JSON.parse(savedProgress);
         if (progress.date === today) {
           setCompletedToday(progress.completedDeeds);
           setTotalCompleted(progress.completedDeeds.length);
+        } else {
+          // New day, start fresh
+          setCompletedToday([]);
+          setTotalCompleted(0);
         }
+      } else {
+        // No previous progress, start fresh
+        setCompletedToday([]);
+        setTotalCompleted(0);
       }
       
       if (savedFavorites) {
@@ -549,6 +783,9 @@ export default function Home() {
       if (savedStreak) {
         setStreak(parseInt(savedStreak));
       }
+
+      // Update last active date
+      await AsyncStorage.setItem('lastActiveDate', today);
     } catch (error) {
       console.log('Error loading progress:', error);
     }
@@ -590,12 +827,329 @@ export default function Home() {
         currentStreak: streak
       };
       
+      // Save current day's progress
       await AsyncStorage.setItem('dailyProgress', JSON.stringify(progress));
       await AsyncStorage.setItem('favorites', JSON.stringify(favoritesToSave));
       await AsyncStorage.setItem('streak', streak.toString());
+      await AsyncStorage.setItem('totalCompleted', totalCompleted.toString());
+
+      // Update historical progress data
+      const savedHistory = await AsyncStorage.getItem('progressHistory');
+      const historyData: Record<string, number> = savedHistory ? JSON.parse(savedHistory) : {};
+      
+      // Update today's count in history
+      historyData[today] = completedToday.length;
+      
+      // Save updated history
+      await AsyncStorage.setItem('progressHistory', JSON.stringify(historyData));
+
+      // Update calendar data for today
+      const savedCalendar = await AsyncStorage.getItem('calendarProgress');
+      const calendarData: Record<string, {
+        completed: number[];
+        completedCount: number;
+        goalMet: boolean;
+        streak: number;
+      }> = savedCalendar ? JSON.parse(savedCalendar) : {};
+      
+      calendarData[today] = {
+        completed: completedToday,
+        completedCount: completedToday.length,
+        goalMet: completedToday.length >= settings.dailyGoal,
+        streak: streak
+      };
+      
+      await AsyncStorage.setItem('calendarProgress', JSON.stringify(calendarData));
+
+      // Update weekly tracking for today
+      console.log('Updating weekly tracking for today:', today, 'count:', completedToday.length);
+      await updateWeeklyTracking(today, completedToday.length);
+
+      // Update best streak if current is higher
+      if (streak > 0) {
+        const savedBestStreak = await AsyncStorage.getItem('bestStreak');
+        const currentBest = savedBestStreak ? parseInt(savedBestStreak) : 0;
+        if (streak > currentBest) {
+          await AsyncStorage.setItem('bestStreak', streak.toString());
+        }
+      }
     } catch (error) {
       console.log('Error saving progress:', error);
     }
+  };
+
+  // Achievement system functions
+  const checkAndUnlockAchievements = async () => {
+    try {
+      const savedAchievements = await AsyncStorage.getItem('achievements');
+      let userAchievements: Achievement[] = savedAchievements ? JSON.parse(savedAchievements) : achievementsList;
+      
+      const currentStats = {
+        totalCompleted: totalCompleted,
+        currentStreak: streak,
+        goalDaysCount: await getGoalDaysCount()
+      };
+      
+      let newlyUnlocked: Achievement[] = [];
+      
+      // Check each achievement
+      const updatedAchievements = userAchievements.map(achievement => {
+        if (achievement.unlocked) return achievement;
+        
+        let shouldUnlock = false;
+        
+        switch (achievement.condition.type) {
+          case 'total_completed':
+            shouldUnlock = currentStats.totalCompleted >= achievement.condition.value;
+            break;
+          case 'streak':
+            shouldUnlock = currentStats.currentStreak >= achievement.condition.value;
+            break;
+          case 'daily_goal':
+            shouldUnlock = currentStats.goalDaysCount >= achievement.condition.value;
+            break;
+          case 'app_shared':
+          case 'deed_shared':
+          case 'app_reviewed':
+            // These achievements are handled separately when the user performs the action
+            // Don't check them here as they're not part of automatic progress tracking
+            shouldUnlock = false;
+            break;
+        }
+        
+        if (shouldUnlock) {
+          newlyUnlocked.push({ ...achievement, unlocked: true });
+          return { ...achievement, unlocked: true };
+        }
+        
+        return achievement;
+      });
+      
+      // Save updated achievements
+      await AsyncStorage.setItem('achievements', JSON.stringify(updatedAchievements));
+      
+      // Show animations for newly unlocked achievements
+      if (newlyUnlocked.length > 0) {
+        for (const achievement of newlyUnlocked) {
+          await showAchievementOverlay(achievement);
+          // Wait before showing next achievement
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        }
+      }
+      
+    } catch (error) {
+      console.log('Error checking achievements:', error);
+    }
+  };
+
+  const getGoalDaysCount = async (): Promise<number> => {
+    try {
+      const savedCalendar = await AsyncStorage.getItem('calendarProgress');
+      if (!savedCalendar) return 0;
+      
+      const calendarData = JSON.parse(savedCalendar);
+      let goalDays = 0;
+      
+      Object.values(calendarData).forEach((dayData: any) => {
+        if (dayData.goalMet) goalDays++;
+      });
+      
+      return goalDays;
+    } catch (error) {
+      console.log('Error getting goal days count:', error);
+      return 0;
+    }
+  };
+
+  const showAchievementOverlay = (achievement: Achievement): Promise<void> => {
+    return new Promise((resolve) => {
+      const scale = new Animated.Value(0);
+      const messageOpacity = new Animated.Value(0);
+      const iconScale = new Animated.Value(0);
+      const titleScale = new Animated.Value(0);
+
+      setIsAnyAnimationPlaying(true);
+      setAchievementOverlay({
+        visible: true,
+        achievement: {
+          title: achievement.title,
+          message: achievement.message,
+          icon: achievement.icon,
+          color: achievement.color,
+          category: achievement.category
+        },
+        scale,
+        messageOpacity,
+      });
+
+      // Create enhanced expanding circle animation with staggered content
+      const animation = Animated.sequence([
+        // Phase 1: Circle expansion with bounce effect
+        Animated.spring(scale, {
+          toValue: 1,
+          tension: 80,
+          friction: 8,
+          useNativeDriver: true,
+        }),
+        // Phase 2: Staggered content animation
+        Animated.stagger(150, [
+          Animated.spring(iconScale, {
+            toValue: 1,
+            tension: 100,
+            friction: 8,
+            useNativeDriver: true,
+          }),
+          Animated.spring(titleScale, {
+            toValue: 1,
+            tension: 100,
+            friction: 8,
+            useNativeDriver: true,
+          }),
+          Animated.timing(messageOpacity, {
+            toValue: 1,
+            duration: 500,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: true,
+          }),
+        ]),
+        // Phase 3: Hold for display
+        Animated.delay(2500),
+        // Phase 4: Exit animation
+        Animated.parallel([
+          Animated.timing(scale, {
+            toValue: 0,
+            duration: 600,
+            easing: Easing.in(Easing.cubic),
+            useNativeDriver: true,
+          }),
+          Animated.timing(messageOpacity, {
+            toValue: 0,
+            duration: 400,
+            easing: Easing.in(Easing.cubic),
+            useNativeDriver: true,
+          }),
+        ])
+      ]);
+
+      // Store animation references for skip functionality
+      setAchievementOverlay(prev => prev ? { 
+        ...prev, 
+        animation,
+        iconScale,
+        titleScale
+      } : null);
+
+      animation.start(() => {
+        setAchievementOverlay(null);
+        setIsAnyAnimationPlaying(false);
+        resolve();
+      });
+    });
+  };
+
+  const showRightPopupNotification = (message: string): Promise<void> => {
+    return new Promise((resolve) => {
+      const translateX = new Animated.Value(width);
+      const opacity = new Animated.Value(0);
+
+      setRightPopup({
+        visible: true,
+        message,
+        translateX,
+        opacity,
+      });
+
+      const animation = Animated.sequence([
+        // Slide in from right
+        Animated.parallel([
+          Animated.timing(translateX, {
+            toValue: 0,
+            duration: 400,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: true,
+          }),
+          Animated.timing(opacity, {
+            toValue: 1,
+            duration: 300,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: true,
+          }),
+        ]),
+        // Hold for reading
+        Animated.delay(3000),
+        // Slide out to right
+        Animated.parallel([
+          Animated.timing(translateX, {
+            toValue: width,
+            duration: 300,
+            easing: Easing.in(Easing.cubic),
+            useNativeDriver: true,
+          }),
+          Animated.timing(opacity, {
+            toValue: 0,
+            duration: 200,
+            easing: Easing.in(Easing.cubic),
+            useNativeDriver: true,
+          }),
+        ])
+      ]);
+
+      setRightPopup(prev => prev ? { ...prev, animation } : null);
+
+      animation.start(() => {
+        setRightPopup(null);
+        resolve();
+      });
+    });
+  };
+
+  const createCompletionOverlay = (): Promise<void> => {
+    return new Promise((resolve) => {
+      const scale = new Animated.Value(0);
+      const messageOpacity = new Animated.Value(0);
+
+      setIsAnyAnimationPlaying(true);
+      setCompletionOverlay({
+        visible: true,
+        scale,
+        messageOpacity,
+      });
+
+      // Create expanding circle animation
+      const animation = Animated.sequence([
+        Animated.timing(scale, {
+          toValue: 1,
+          duration: 600,
+          useNativeDriver: true,
+        }),
+        Animated.timing(messageOpacity, {
+          toValue: 1,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+        Animated.delay(1500),
+        Animated.parallel([
+          Animated.timing(scale, {
+            toValue: 0,
+            duration: 300,
+            useNativeDriver: true,
+          }),
+          Animated.timing(messageOpacity, {
+            toValue: 0,
+            duration: 300,
+            useNativeDriver: true,
+          }),
+        ])
+      ]);
+
+      setCompletionOverlay(prev => prev ? { ...prev, animation } : null);
+
+      animation.start(() => {
+        setCompletionOverlay(null);
+        setIsAnyAnimationPlaying(false);
+        resolve();
+      });
+    });
   };
 
   const startAnimations = () => {
@@ -646,6 +1200,15 @@ export default function Home() {
         // Update card content
         setCurrentIndex(targetIndex);
         setCurrentReminder(remindersData[targetIndex]);
+        
+        // Show popup with a different random good deed when navigating
+        if (Math.random() < 0.3) { // 30% chance to show popup on navigation
+          setTimeout(async () => {
+            const availableDeeds = remindersData.filter((_, index) => index !== targetIndex);
+            const randomDeed = availableDeeds[Math.floor(Math.random() * availableDeeds.length)];
+            await showRightPopupNotification(randomDeed.reminder);
+          }, 800);
+        }
         
         // Set initial position for new card
         cardSlideX.stopAnimation();
@@ -769,7 +1332,7 @@ export default function Home() {
       const edgeY = cardCenterY + Math.sin(angle) * (cardHeight / 2 - 20);
       
       return {
-        id: `${Date.now()}_${i}`,
+        id: `${Date.now()}_${Math.random()}_${i}`, // More unique IDs
         x: edgeX,
         y: edgeY,
         color,
@@ -780,9 +1343,8 @@ export default function Home() {
       };
     });
 
-    requestAnimationFrame(() => {
-      setParticles(prev => [...prev, ...newParticles]);
-    });
+    // Add particles immediately without requestAnimationFrame to prevent timing issues
+    setParticles(prev => [...prev, ...newParticles]);
 
     // Animate particles outward from edges
     newParticles.forEach((particle, i) => {
@@ -790,7 +1352,8 @@ export default function Home() {
       const outwardX = Math.cos(angle) * 60;
       const outwardY = Math.sin(angle) * 60;
       
-      Animated.parallel([
+      // Start animation immediately
+      const particleAnimation = Animated.parallel([
         Animated.timing(particle.scale, {
           toValue: 1,
           duration: 200,
@@ -815,10 +1378,13 @@ export default function Home() {
           easing: Easing.out(Easing.cubic),
           useNativeDriver: true,
         }),
-      ]).start(() => {
-        requestAnimationFrame(() => {
+      ]);
+      
+      particleAnimation.start(({ finished }) => {
+        // Only remove if animation completed normally
+        if (finished) {
           setParticles(prev => prev.filter(p => p.id !== particle.id));
-        });
+        }
       });
     });
   };
@@ -864,60 +1430,6 @@ export default function Home() {
     });
   };
 
-  const createCompletionOverlay = () => {
-    const overlay = {
-      visible: true,
-      scale: new Animated.Value(0),
-      messageOpacity: new Animated.Value(0),
-      animation: null as any,
-    };
-    
-    // Use requestAnimationFrame to avoid useInsertionEffect warning
-    requestAnimationFrame(() => {
-      setCompletionOverlay(overlay);
-      
-      const animation = Animated.sequence([
-        // Circle grows from button position with bounce effect
-        Animated.timing(overlay.scale, {
-          toValue: 1,
-          duration: 600,
-          easing: Easing.out(Easing.back(1.5)),
-          useNativeDriver: false,
-        }),
-        // Message appears with ease in
-        Animated.timing(overlay.messageOpacity, {
-          toValue: 1,
-          duration: 400,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }),
-        // Wait a moment
-        Animated.delay(1200),
-        // Hide message before shrinking starts
-        Animated.timing(overlay.messageOpacity, {
-          toValue: 0,
-          duration: 200,
-          easing: Easing.in(Easing.cubic),
-          useNativeDriver: true,
-        }),
-        // Circle shrinks back to button position (no fade)
-        Animated.timing(overlay.scale, {
-          toValue: 0,
-          duration: 800,
-          easing: Easing.in(Easing.back(1.2)),
-          useNativeDriver: false,
-        }),
-      ]);
-      
-      overlay.animation = animation;
-      
-      animation.start(() => {
-        requestAnimationFrame(() => {
-          setCompletionOverlay(null);
-        });
-      });
-    });
-  };
 
   const handleCompletionSkip = () => {
     if (completionOverlay?.animation) {
@@ -928,18 +1440,111 @@ export default function Home() {
         toValue: 0,
         duration: 200,
         easing: Easing.in(Easing.cubic),
-        useNativeDriver: false,
+        useNativeDriver: true,
       }).start(() => {
         requestAnimationFrame(() => {
           setCompletionOverlay(null);
+          setIsAnyAnimationPlaying(false);
         });
       });
+    }
+  };
+
+  const handleAchievementSkip = () => {
+    if (achievementOverlay?.animation) {
+      achievementOverlay.animation.stop();
+      
+      // Quick shrink animation for all elements
+      const animations = [
+        Animated.timing(achievementOverlay.scale, {
+          toValue: 0,
+          duration: 200,
+          easing: Easing.in(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(achievementOverlay.messageOpacity, {
+          toValue: 0,
+          duration: 200,
+          easing: Easing.in(Easing.cubic),
+          useNativeDriver: true,
+        })
+      ];
+
+      // Add icon and title animations if they exist
+      if (achievementOverlay.iconScale) {
+        animations.push(
+          Animated.timing(achievementOverlay.iconScale, {
+            toValue: 0,
+            duration: 200,
+            easing: Easing.in(Easing.cubic),
+            useNativeDriver: true,
+          })
+        );
+      }
+
+      if (achievementOverlay.titleScale) {
+        animations.push(
+          Animated.timing(achievementOverlay.titleScale, {
+            toValue: 0,
+            duration: 200,
+            easing: Easing.in(Easing.cubic),
+            useNativeDriver: true,
+          })
+        );
+      }
+
+      Animated.parallel(animations).start(() => {
+        requestAnimationFrame(() => {
+          setAchievementOverlay(null);
+          setIsAnyAnimationPlaying(false);
+        });
+      });
+    }
+  };
+
+  const handleGlobalTapToSkip = () => {
+    if (completionOverlay) {
+      handleCompletionSkip();
+    } else if (achievementOverlay) {
+      handleAchievementSkip();
+    }
+  };
+
+  // Helper function to unlock special achievements
+  const unlockSpecialAchievement = async (achievementType: 'app_shared' | 'deed_shared' | 'app_reviewed') => {
+    try {
+      // Mark the achievement as triggered in storage
+      await AsyncStorage.setItem(achievementType, 'true');
+      
+      // Load current achievements
+      const savedAchievements = await AsyncStorage.getItem('achievements');
+      const userAchievements: Achievement[] = savedAchievements ? JSON.parse(savedAchievements) : achievementsList;
+      
+      // Find and unlock the specific achievement
+      const updatedAchievements = userAchievements.map(achievement => {
+        if (achievement.condition.type === achievementType && !achievement.unlocked) {
+          // Show the achievement animation
+          showAchievementOverlay(achievement);
+          return { ...achievement, unlocked: true };
+        }
+        return achievement;
+      });
+      
+      // Save updated achievements
+      await AsyncStorage.setItem('achievements', JSON.stringify(updatedAchievements));
+      
+    } catch (error) {
+      console.log('Error unlocking special achievement:', error);
     }
   };
 
   const animateCard = (index: number, isFavoriteAction = false) => {
     const randomRotation = (Math.random() - 0.5) * 10;
     const cardAnim = cardAnimations[index];
+    
+    // Stop any existing animations for this card to prevent conflicts
+    cardAnim.scale.stopAnimation();
+    cardAnim.rotation.stopAnimation();
     
     // Create particles around card edges
     const particleColor = isFavoriteAction ? '#ff6b6b' : '#2fcc35';
@@ -1035,7 +1640,12 @@ export default function Home() {
   const cardMargin = 10;
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.background }]}>
+    <TouchableOpacity 
+      style={[styles.container, { backgroundColor: theme.background }]}
+      onPress={isAnyAnimationPlaying ? handleGlobalTapToSkip : undefined}
+      activeOpacity={1}
+      disabled={!isAnyAnimationPlaying}
+    >
       {/* Header */}
       <View style={[styles.header, { backgroundColor: theme.background }]}>
         <Link href="/settings" asChild>
@@ -1084,43 +1694,29 @@ export default function Home() {
       >
 
         {/* Notification Permission Notice */}
-        {settings.notificationInterval > 0 && notificationPermission !== 'granted' && (
+        {settings.notificationInterval > 0 && notificationPermission !== 'granted' && notificationPermission !== 'expo-go-limitation' && (
           <View style={[styles.permissionNotice, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
             <View style={styles.permissionContent}>
               <Ionicons 
-                name={notificationPermission === 'expo-go-limitation' ? 'build-outline' : 'notifications-off'} 
+                name="notifications-off"
                 size={24} 
-                color={notificationPermission === 'expo-go-limitation' ? '#ffa500' : '#ff6b6b'} 
+                color="#ff6b6b"
               />
               <View style={styles.permissionText}>
                 <Text style={[styles.permissionTitle, { color: theme.textPrimary, fontFamily: 'Poppins_600SemiBold' }]}>
-                  {notificationPermission === 'expo-go-limitation' 
-                    ? 'Development Build Required' 
-                    : 'Notification Permission Required'}
+                  Notification Permission Required
                 </Text>
                 <Text style={[styles.permissionDescription, { color: theme.textSecondary, fontFamily: 'Poppins_400Regular' }]}>
-                  {notificationPermission === 'expo-go-limitation' 
-                    ? 'Background notifications require a development build. They don\'t work in Expo Go. Visit expo.dev/develop/development-builds to learn more.'
-                    : `Please enable notifications to receive reminders every ${formatIntervalText(settings.notificationInterval).toLowerCase()}, even when the app is closed.`}
+                  Please enable notifications to receive reminders every {formatIntervalText(settings.notificationInterval).toLowerCase()}, even when the app is closed.
                 </Text>
               </View>
             </View>
             <TouchableOpacity 
               style={[styles.permissionButton, { backgroundColor: theme.accent }]}
-              onPress={notificationPermission === 'expo-go-limitation' 
-                ? () => Alert.alert(
-                    'Development Build Required',
-                    'Background notifications are not supported in Expo Go due to SDK 53 limitations. To enable notifications:\n\n1. Create a development build\n2. Install it on your device\n3. Background notifications will work\n\nFor now, in-app reminders will continue to work when the app is open.',
-                    [
-                      { text: 'Learn More', onPress: () => console.log('Open development builds docs') },
-                      { text: 'OK', style: 'cancel' }
-                    ]
-                  )
-                : requestNotificationPermissions
-              }
+              onPress={requestNotificationPermissions}
             >
               <Text style={[styles.permissionButtonText, { fontFamily: 'Poppins_500Medium' }]}>
-                {notificationPermission === 'expo-go-limitation' ? 'Learn More' : 'Enable'}
+                Enable
               </Text>
             </TouchableOpacity>
           </View>
@@ -1253,7 +1849,15 @@ export default function Home() {
                         
                         // Show completion overlay for new completions
                         if (!completedToday.includes(currentIndex)) {
-                          createCompletionOverlay();
+                          await createCompletionOverlay();
+                          // Show a random good deed popup after completion
+                          setTimeout(async () => {
+                            const randomIndex = Math.floor(Math.random() * remindersData.length);
+                            const randomGoodDeed = remindersData[randomIndex];
+                            await showRightPopupNotification(randomGoodDeed.reminder);
+                          }, 1000);
+                          // Check for newly unlocked achievements
+                          setTimeout(() => checkAndUnlockAchievements(), 500);
                         }
                         
                         // Save progress with updated data
@@ -1418,7 +2022,184 @@ export default function Home() {
           />
         ))}
       </View>
-    </View>
+
+      {/* Custom Alert Modal */}
+      {customAlert && (
+        <Modal
+          visible={customAlert.visible}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={hideCustomAlert}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { backgroundColor: theme.cardBackground }]}>
+              <Text style={[styles.modalTitle, { color: theme.textPrimary, fontFamily: 'Poppins_600SemiBold' }]}>
+                {customAlert.title}
+              </Text>
+              <Text style={[styles.modalMessage, { color: theme.textSecondary, fontFamily: 'Poppins_400Regular' }]}>
+                {customAlert.message}
+              </Text>
+              <View style={styles.modalActions}>
+                {customAlert.buttons.map((button, index) => (
+                  <TouchableOpacity 
+                    key={index}
+                    style={[
+                      styles.modalButton, 
+                      button.style === 'cancel' ? styles.cancelModalButton : styles.primaryModalButton,
+                      button.style === 'cancel' ? { borderColor: theme.border } : { backgroundColor: theme.accent }
+                    ]}
+                    onPress={() => {
+                      hideCustomAlert();
+                      button.onPress?.();
+                    }}
+                  >
+                    <Text style={[
+                      styles.modalButtonText, 
+                      { 
+                        color: button.style === 'cancel' ? theme.textSecondary : '#ffffff',
+                        fontFamily: 'Poppins_500Medium'
+                      }
+                    ]}>
+                      {button.text}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          </View>
+        </Modal>
+      )}
+
+      {/* Completion Overlay */}
+      {completionOverlay && (
+        <View style={styles.completionOverlay}>
+          <Animated.View 
+            style={[
+              styles.completionCircle, 
+              {
+                transform: [{ scale: completionOverlay.scale }]
+              }
+            ]} 
+          />
+          <Animated.View 
+            style={[
+              styles.completionMessage,
+              {
+                opacity: completionOverlay.messageOpacity
+              }
+            ]}
+          >
+            <Ionicons name="checkmark-circle" size={48} color="#ffffff" />
+            <Text style={[styles.completionText, { fontFamily: 'Poppins_700Bold' }]}>
+              Well Done!
+            </Text>
+          </Animated.View>
+        </View>
+      )}
+
+      {/* Achievement Overlay */}
+      {achievementOverlay && (
+        <TouchableOpacity 
+          style={styles.achievementOverlay}
+          onPress={handleAchievementSkip}
+          activeOpacity={1}
+        >
+          <Animated.View 
+            style={[
+              styles.achievementCircle, 
+              {
+                backgroundColor: achievementOverlay.achievement.color,
+                transform: [{ scale: achievementOverlay.scale }]
+              }
+            ]} 
+          />
+          <Animated.View 
+            style={[
+              styles.achievementMessage,
+              {
+                opacity: achievementOverlay.messageOpacity
+              }
+            ]}
+          >
+            <View style={[styles.achievementCategoryBadge, { backgroundColor: achievementOverlay.achievement.color + '20' }]}>
+              <Text style={[styles.achievementCategoryText, { 
+                color: achievementOverlay.achievement.color, 
+                fontFamily: 'Poppins_600SemiBold' 
+              }]}>
+                {achievementOverlay.achievement.category}
+              </Text>
+            </View>
+            <Animated.View
+              style={[
+                styles.achievementIconContainer,
+                {
+                  transform: [{ scale: achievementOverlay.iconScale || new Animated.Value(1) }]
+                }
+              ]}
+            >
+              <Ionicons 
+                name={achievementOverlay.achievement.icon as any} 
+                size={60} 
+                color="#ffffff" 
+                style={styles.achievementIcon}
+              />
+            </Animated.View>
+            <Animated.View
+              style={[
+                styles.achievementTitleContainer,
+                {
+                  transform: [{ scale: achievementOverlay.titleScale || new Animated.Value(1) }]
+                }
+              ]}
+            >
+              <Text style={[styles.achievementTitle, { fontFamily: 'Poppins_700Bold' }]}>
+                Achievement Unlocked!
+              </Text>
+              <Text style={[styles.achievementName, { fontFamily: 'Poppins_600SemiBold' }]}>
+                {achievementOverlay.achievement.title}
+              </Text>
+            </Animated.View>
+            <Text style={[styles.achievementDescription, { fontFamily: 'Poppins_400Regular' }]}>
+              {achievementOverlay.achievement.message}
+            </Text>
+          </Animated.View>
+        </TouchableOpacity>
+      )}
+
+      {/* Right-side Popup Notification */}
+      {rightPopup && (
+        <Animated.View
+          style={[
+            styles.rightPopupContainer,
+            {
+              backgroundColor: theme.cardBackground,
+              borderColor: theme.border,
+              transform: [{ translateX: rightPopup.translateX }],
+              opacity: rightPopup.opacity,
+            }
+          ]}
+          pointerEvents="none"
+        >
+          <View style={styles.rightPopupContent}>
+            <Ionicons 
+              name="bulb" 
+              size={20} 
+              color={theme.accent} 
+              style={styles.rightPopupIcon}
+            />
+            <Text style={[
+              styles.rightPopupText, 
+              { 
+                color: theme.textPrimary,
+                fontFamily: 'Poppins_500Medium'
+              }
+            ]}>
+              {rightPopup.message}
+            </Text>
+          </View>
+        </Animated.View>
+      )}
+    </TouchableOpacity>
   );
 }
 
@@ -1749,38 +2530,6 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
   },
-  completionOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    zIndex: 2000,
-  },
-  completionCircle: {
-    position: 'absolute',
-    width: Math.max(width, height) * 2, // Large enough to cover entire screen
-    height: Math.max(width, height) * 2,
-    borderRadius: Math.max(width, height),
-    backgroundColor: '#2fcc35',
-    top: height * 0.7 - Math.max(width, height), // Start from button position
-    left: width * 0.5 - Math.max(width, height),
-  },
-  completionMessage: {
-    position: 'absolute',
-    top: height * 0.5 - 50, // Center vertically on screen
-    left: width * 0.5 - 100, // Center horizontally on screen
-    width: 200,
-    height: 100,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  completionText: {
-    color: '#ffffff',
-    fontSize: 24,
-    textAlign: 'center',
-    marginTop: 8,
-  },
   heartOverlay: {
     position: 'absolute',
     top: 0,
@@ -1795,5 +2544,194 @@ const styles = StyleSheet.create({
     height: 40,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  // Custom Alert Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    borderRadius: 20,
+    padding: 24,
+    width: '100%',
+    maxWidth: 400,
+    maxHeight: '80%',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  modalMessage: {
+    fontSize: 16,
+    lineHeight: 24,
+    marginBottom: 24,
+    textAlign: 'left',
+    flexShrink: 1,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  modalButton: {
+    flex: 1,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 44,
+  },
+  cancelModalButton: {
+    borderWidth: 1,
+  },
+  primaryModalButton: {
+    // backgroundColor will be set dynamically
+  },
+  modalButtonText: {
+    fontSize: 16,
+    fontWeight: '500',
+    textAlign: 'center',
+    flexShrink: 1,
+  },
+  // Completion Overlay Styles
+  completionOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 2000,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  completionCircle: {
+    position: 'absolute',
+    width: Math.max(width, height) * 2,
+    height: Math.max(width, height) * 2,
+    borderRadius: Math.max(width, height),
+    backgroundColor: '#2fcc35',
+  },
+  completionMessage: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 2001,
+  },
+  completionText: {
+    color: '#ffffff',
+    fontSize: 24,
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  // Achievement Overlay Styles
+  achievementOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 3000,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  achievementCircle: {
+    position: 'absolute',
+    width: Math.max(width, height) * 2,
+    height: Math.max(width, height) * 2,
+    borderRadius: Math.max(width, height),
+  },
+  achievementMessage: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 3001,
+    paddingHorizontal: 40,
+  },
+  achievementCategoryBadge: {
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderRadius: 20,
+    marginBottom: 20,
+  },
+  achievementCategoryText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  achievementIconContainer: {
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  achievementIcon: {
+    textShadowColor: 'rgba(0, 0, 0, 0.3)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 4,
+  },
+  achievementTitleContainer: {
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  achievementTitle: {
+    color: '#ffffff',
+    fontSize: 28,
+    textAlign: 'center',
+    marginBottom: 8,
+    textShadowColor: 'rgba(0, 0, 0, 0.3)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 4,
+  },
+  achievementName: {
+    color: '#ffffff',
+    fontSize: 22,
+    textAlign: 'center',
+    marginBottom: 12,
+    textShadowColor: 'rgba(0, 0, 0, 0.3)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 4,
+  },
+  achievementDescription: {
+    color: '#ffffff',
+    fontSize: 16,
+    textAlign: 'center',
+    lineHeight: 24,
+    textShadowColor: 'rgba(0, 0, 0, 0.3)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 4,
+  },
+  // Right popup notification styles
+  rightPopupContainer: {
+    position: 'absolute',
+    top: 120,
+    right: 20,
+    maxWidth: width * 0.8,
+    minWidth: 200,
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 8,
+    zIndex: 4000,
+  },
+  rightPopupContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  rightPopupIcon: {
+    flexShrink: 0,
+  },
+  rightPopupText: {
+    fontSize: 14,
+    lineHeight: 20,
+    flex: 1,
   },
 });
